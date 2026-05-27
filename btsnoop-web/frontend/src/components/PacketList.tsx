@@ -43,15 +43,8 @@ export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
   const parentRef = useRef<HTMLDivElement>(null);
   const lastCountRef = useRef(0);
 
-  const filteredPackets = React.useMemo(() => {
-    if (!filter) return packets;
-    const lowerFilter = filter.toLowerCase();
-    return packets.filter(
-      (p) =>
-        p.protocol.toLowerCase().includes(lowerFilter) ||
-        p.summary.toLowerCase().includes(lowerFilter)
-    );
-  }, [packets, filter]);
+  // 包列表直接使用 store 中的数据（过滤由后端 WebSocket 完成）
+  const filteredPackets = packets;
 
   const virtualizer = useVirtualizer({
     count: filteredPackets.length,
@@ -108,26 +101,12 @@ export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
     dispatch({ type: 'SET_AUTO_SCROLL', enabled: !autoScroll });
   }, [dispatch, autoScroll]);
 
-  const handleFilterChange = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
-      dispatch({ type: 'SET_FILTER', filter: e.target.value });
-    },
-    [dispatch]
-  );
-
   return (
     <div className="panel flex flex-col h-full">
       {/* Header */}
       <div className="panel-header">
         <span>Packet List ({filteredPackets.length} packets)</span>
         <div className="flex items-center gap-2">
-          <input
-            type="text"
-            placeholder="Filter protocol..."
-            value={filter}
-            onChange={handleFilterChange}
-            className="px-2 py-0.5 bg-ws-bg border border-ws-border rounded text-xs text-gray-200 w-48 focus:outline-none focus:border-ws-accent"
-          />
           <button
             onClick={toggleAutoScroll}
             className={`px-2 py-0.5 rounded text-xs transition-colors ${

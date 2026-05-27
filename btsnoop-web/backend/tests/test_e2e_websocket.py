@@ -137,6 +137,51 @@ class TestUploadAndWebSocket:
             assert msg["type"] == "packet_batch"
             assert all(p["direction"] == "sent" for p in msg["packets"])
 
+    def test_websocket_protocol_filter_buttons(self, client, sample_btsnoop_bytes):
+        """Test protocol quick-filter expressions (ProtoFilterBar buttons).
+
+        This catches the bug where local text filter conflicts with backend
+        expression filter. The expressions from ProtoFilterBar must:
+        1. Be valid backend filter syntax
+        2. Correctly match/exclude packets by protocol
+        3. Return only matching packets in the WebSocket response
+        """
+        resp = client.post(
+            "/api/upload",
+            files={"file": ("test.btsnoop", io.BytesIO(sample_btsnoop_bytes), "application/octet-stream")},
+        )
+        session_id = resp.json()["session_id"]
+
+        with client.websocket_connect(f"/ws/{session_id}") as ws:
+            ws.receive_json()  # drain initial batch
+
+            # Filter: only ATT protocol (matches 1 packet in sample)
+            ws.send_json({"action": "set_filter", "expression": "protocol == att"})
+            msg = ws.receive_json()
+            assert msg["type"] == "filter_applied"
+            assert msg["matched"] == 1
+
+            msg = ws.receive_json()
+            assert msg["type"] == "packet_batch"
+            assert len(msg["packets"]) == 1
+            assert msg["packets"][0]["protocol"] == "ATT"
+
+            # Filter: HCI commands OR events
+            ws.send_json({"action": "set_filter", "expression": "protocol == hci_cmd || protocol == hci_evt"})
+            msg = ws.receive_json()
+            assert msg["type"] == "filter_applied"
+            assert msg["matched"] == 2  # Reset cmd + Cmd_Complete evt
+
+            msg = ws.receive_json()
+            assert msg["type"] == "packet_batch"
+            assert all(p["protocol"] in ("HCI_CMD", "HCI_EVT") for p in msg["packets"])
+
+            # Clear filter: should get all 3 packets back
+            ws.send_json({"action": "set_filter", "expression": ""})
+            msg = ws.receive_json()
+            assert msg["type"] == "filter_applied"
+            assert msg["matched"] == 3
+
     def test_websocket_invalid_session(self, client):
         """WebSocket to non-existent session should close."""
         with pytest.raises(Exception):
