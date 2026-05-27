@@ -813,12 +813,13 @@ async def health_check():
 FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
 
 if os.path.isdir(FRONTEND_DIST):
-    from fastapi.staticfiles import StaticFiles
     from fastapi.responses import FileResponse
 
     @app.get("/{path:path}")
     async def serve_frontend(path: str):
         """Serve frontend static files in production mode."""
+        if path.startswith("api/") or path.startswith("ws/"):
+            raise HTTPException(status_code=404, detail="Not found")
         file_path = os.path.join(FRONTEND_DIST, path)
         if os.path.isfile(file_path):
             return FileResponse(file_path)
