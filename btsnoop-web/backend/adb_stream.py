@@ -104,11 +104,32 @@ def check_adb_device(serial: Optional[str] = None) -> tuple[bool, str]:
 
 
 def find_btsnoop_path(serial: Optional[str] = None) -> Optional[str]:
-    """Find the btsnoop file path on the device."""
+    """Find the btsnoop file path on the device. Supports timestamped filenames."""
+    # First try fixed paths
     for path in BTSNOOP_PATHS:
         rc, stdout, stderr = _run_adb(["shell", f"ls {path}"], serial=serial, timeout=5)
         if rc == 0 and path in stdout:
             return path
+
+    # Try to find timestamped files and .cfa.curf (active capture file)
+    log_dir = "/data/misc/bluetooth/logs"
+    rc, stdout, stderr = _run_adb(
+        ["shell", f"ls -t {log_dir}/btsnoop_hci*.log {log_dir}/BT_HCI*.cfa.curf 2>/dev/null | head -1"],
+        serial=serial, timeout=5
+    )
+    if rc == 0 and stdout.strip():
+        path = stdout.strip()
+        if path.startswith("/"):
+            return path
+
+    # Also check for .cfa.curf files (Xiaomi/MTK active capture)
+    rc, stdout, stderr = _run_adb(
+        ["shell", f"ls -t {log_dir}/*.cfa.curf 2>/dev/null | head -1"],
+        serial=serial, timeout=5
+    )
+    if rc == 0 and stdout.strip() and stdout.strip().startswith("/"):
+        return stdout.strip()
+
     return None
 
 
