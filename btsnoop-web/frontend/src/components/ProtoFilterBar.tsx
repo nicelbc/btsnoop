@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback } from 'react';
 import { usePacketStore } from '../stores/packetStore';
 
 const PROTO_FILTERS = [
@@ -15,10 +15,9 @@ const PROTO_FILTERS = [
 
 export const ProtoFilterBar: React.FC = () => {
   const { state, dispatch } = usePacketStore();
-  const [active, setActive] = useState('');
+  const active = state.filter;
 
   const handleClick = useCallback((filter: string) => {
-    setActive(filter);
     dispatch({ type: 'SET_FILTER', filter });
     window.dispatchEvent(new CustomEvent('btsnoop:apply_filter', { detail: { filter } }));
   }, [dispatch]);
