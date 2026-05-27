@@ -22,6 +22,7 @@ export interface DecodedLayer {
   protocol: string;
   summary: string;
   fields: DecodedField[];
+  sublayers?: DecodedLayer[];
   payload_offset: number;
   payload_length: number;
 }
