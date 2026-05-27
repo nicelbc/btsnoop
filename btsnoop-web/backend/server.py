@@ -768,6 +768,34 @@ async def get_session_stats(session_id: str):
     )
 
 
+# --- pcapng Export ---
+
+
+@app.get("/api/sessions/{session_id}/export/pcapng")
+async def export_pcapng(session_id: str):
+    """Export session as pcapng file (Wireshark compatible)."""
+    from pcapng_export import generate_pcapng
+    from fastapi.responses import StreamingResponse
+
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    def stream():
+        for chunk in generate_pcapng(
+            session.raw_packets, session.flags_list, session.summaries
+        ):
+            yield chunk
+
+    return StreamingResponse(
+        stream(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="btsnoop_{session_id[:8]}.pcapng"'
+        },
+    )
+
+
 # --- Health check ---
 
 
