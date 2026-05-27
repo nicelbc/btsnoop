@@ -52,6 +52,7 @@ from . import att
 from . import smp
 from . import rfcomm
 from . import sdp
+from . import hfp
 
 
 def parse_packet(
@@ -212,6 +213,15 @@ def _parse_packet_inner(
                 if len(upper_payload) >= 3:
                     rfcomm_layer = rfcomm.decode(upper_payload)
                     layers.append(rfcomm_layer)
+                    # Check if RFCOMM payload contains HFP AT commands
+                    if rfcomm_layer.payload and len(rfcomm_layer.payload) > 0:
+                        try:
+                            text = rfcomm_layer.payload.decode('utf-8', errors='ignore').strip()
+                            if text.startswith(('AT', '+', 'OK', 'ERROR', 'RING')):
+                                hfp_layer = hfp.decode(rfcomm_layer.payload)
+                                layers.append(hfp_layer)
+                        except Exception:
+                            pass
                 else:
                     layers.append(DecodedLayer(
                         protocol="RFCOMM",

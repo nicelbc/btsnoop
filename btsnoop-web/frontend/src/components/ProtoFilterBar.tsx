@@ -9,6 +9,7 @@ const PROTO_FILTERS = [
   { label: 'AVRCP', filter: 'protocol == avrcp', color: 'bg-pink-600' },
   { label: 'ATT/BLE', filter: 'protocol == att', color: 'bg-orange-600' },
   { label: 'SMP', filter: 'protocol == smp', color: 'bg-teal-600' },
+  { label: 'HFP', filter: 'protocol == hfp', color: 'bg-red-600' },
   { label: 'RFCOMM', filter: 'protocol == rfcomm', color: 'bg-yellow-700' },
   { label: 'SDP', filter: 'protocol == sdp', color: 'bg-indigo-600' },
 ];
