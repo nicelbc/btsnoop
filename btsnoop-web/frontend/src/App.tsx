@@ -188,7 +188,13 @@ const App: React.FC = () => {
   const handleExport = useCallback(() => {
     const sessionId = state.sessionId;
     if (!sessionId) return;
-    window.open(`/api/sessions/${sessionId}/export/json`, '_blank');
+    const format = window.prompt(
+      '导出格式:\n1 - pcapng (Wireshark)\n2 - JSON\n3 - CSV\n\n输入数字:',
+      '1'
+    );
+    if (format === '1') window.open(`/api/sessions/${sessionId}/export/pcapng`, '_blank');
+    else if (format === '2') window.open(`/api/sessions/${sessionId}/export/json`, '_blank');
+    else if (format === '3') window.open(`/api/sessions/${sessionId}/export/csv`, '_blank');
   }, [state.sessionId]);
 
   return (
