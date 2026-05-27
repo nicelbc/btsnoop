@@ -1,7 +1,8 @@
-import React, { useRef, useEffect, useCallback } from 'react';
+import React, { useRef, useEffect, useCallback, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { usePacketStore } from '../stores/packetStore';
 import { PacketSummary } from '../types';
+import { ContextMenu, ContextMenuState, initialContextMenu } from './ContextMenu';
 
 const PROTOCOL_COLORS: Record<string, string> = {
   HCI: 'border-l-proto-hci text-proto-hci',
@@ -37,6 +38,7 @@ interface PacketListProps {
 export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
   const { state, dispatch } = usePacketStore();
   const { packets, selectedIndex, autoScroll, filter } = state;
+  const [ctxMenu, setCtxMenu] = useState<ContextMenuState>(initialContextMenu);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const lastCountRef = useRef(0);
@@ -152,6 +154,10 @@ export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
                   isSelected ? 'packet-row-selected' : ''
                 }`}
                 onClick={() => handleRowClick(packet)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setCtxMenu({ visible: true, x: e.clientX, y: e.clientY, packet });
+                }}
               >
                 <span className="w-14 shrink-0 text-gray-500">{packet.index}</span>
                 <span className="w-24 shrink-0 text-gray-400">
@@ -176,6 +182,14 @@ export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
           })}
         </div>
       </div>
+      {ctxMenu.visible && ctxMenu.packet && (
+        <ContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          packet={ctxMenu.packet}
+          onClose={() => setCtxMenu(initialContextMenu)}
+        />
+      )}
     </div>
   );
 };
