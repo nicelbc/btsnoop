@@ -523,13 +523,15 @@ def parse_capabilities(payload_data):
         cat_name = AVDTP_CATEGORIES.get(cat_id, '0x{:02X}'.format(cat_id))
         cat_data = payload_data[i+2:i+2+cat_len]
 
-        if cat_id == 0x07 and cat_len >= 2:  # MEDIA_CODEC
+        if cat_id == 0x07 and cat_len >= 2 and len(cat_data) >= 2:  # MEDIA_CODEC
             media_type = (cat_data[0] >> 4) & 0x0F
             codec_type = cat_data[1]
             codec_data = cat_data[2:]
             codec_info = parse_codec_capability(media_type, codec_type, codec_data)
             caps.append('Codec={}'.format(codec_info))
-        elif cat_id == 0x04 and cat_len >= 2:  # CONTENT_PROTECTION
+        elif cat_id == 0x07 and len(cat_data) < 2:
+            caps.append('MEDIA_CODEC(fragmented)')
+        elif cat_id == 0x04 and cat_len >= 2 and len(cat_data) >= 2:  # CONTENT_PROTECTION
             cp_type = struct.unpack('<H', cat_data[0:2])[0]
             cp_names = {0x01: 'DTCP', 0x02: 'SCMS-T'}
             caps.append('CP={}'.format(cp_names.get(cp_type, '0x{:04X}'.format(cp_type))))
