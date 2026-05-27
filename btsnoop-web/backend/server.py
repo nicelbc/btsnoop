@@ -521,10 +521,12 @@ async def _run_demo_capture(live_session: LiveSession):
 
     live_session.is_running = True
 
-    # Use real cfa file first (more data), fallback to sample
+    # Use large demo file (6000+ packets with AVDTP/AVRCP/RFCOMM)
+    base_dir = os.path.dirname(os.path.abspath(__file__))
     demo_files = [
+        os.path.join(base_dir, "tests", "demo.cfa"),
         "/home/mi/myfile/btools_back20230810/hcidump_2024-03-15-15-31-22-105460.cfa",
-        os.path.join(os.path.dirname(__file__), "tests", "sample.btsnoop"),
+        os.path.join(base_dir, "tests", "sample.btsnoop"),
     ]
     demo_file = None
     for f in demo_files:
