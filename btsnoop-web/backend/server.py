@@ -427,6 +427,174 @@ async def _handle_get_packets(websocket: WebSocket, session: Session, msg: dict)
     )
 
 
+# --- Live ADB Streaming ---
+
+from adb_stream import LiveSession, check_adb_device, start_live_capture
+
+live_sessions: dict[str, LiveSession] = {}
+
+
+@app.get("/api/live/devices")
+async def list_adb_devices():
+    """List available ADB devices."""
+    from adb_stream import _run_adb
+    rc, stdout, stderr = _run_adb(["devices"])
+    if rc != 0:
+        return {"devices": [], "error": stderr}
+
+    lines = stdout.strip().split('\n')[1:]
+    devices = []
+    for line in lines:
+        parts = line.split('\t')
+        if len(parts) >= 2 and parts[1] == 'device':
+            devices.append(parts[0])
+    return {"devices": devices}
+
+
+@app.post("/api/live/start")
+async def start_live(serial: Optional[str] = None):
+    """Start live ADB capture. Returns session_id for WebSocket connection."""
+    ok, info = check_adb_device(serial)
+    if not ok:
+        raise HTTPException(status_code=400, detail=info)
+
+    device_serial = info  # actual device serial
+    import uuid
+    session_id = str(uuid.uuid4())
+    live_session = LiveSession(session_id=session_id, serial=device_serial)
+    live_sessions[session_id] = live_session
+
+    # Start capture task
+    task = asyncio.create_task(start_live_capture(live_session))
+    live_session._task = task
+
+    return {
+        "session_id": session_id,
+        "device": device_serial,
+        "status": "capturing",
+    }
+
+
+@app.post("/api/live/stop/{session_id}")
+async def stop_live(session_id: str):
+    """Stop live ADB capture."""
+    live_session = live_sessions.get(session_id)
+    if not live_session:
+        raise HTTPException(status_code=404, detail="Live session not found")
+
+    live_session.is_running = False
+    if live_session._task:
+        live_session._task.cancel()
+        try:
+            await live_session._task
+        except asyncio.CancelledError:
+            pass
+
+    return {
+        "session_id": session_id,
+        "total_packets": live_session.total_packets,
+        "status": "stopped",
+    }
+
+
+@app.get("/api/live/status/{session_id}")
+async def live_status(session_id: str):
+    """Get live capture status."""
+    live_session = live_sessions.get(session_id)
+    if not live_session:
+        raise HTTPException(status_code=404, detail="Live session not found")
+
+    return {
+        "session_id": session_id,
+        "is_running": live_session.is_running,
+        "total_packets": live_session.total_packets,
+        "error": live_session.error,
+    }
+
+
+@app.websocket("/ws/live/{session_id}")
+async def websocket_live(websocket: WebSocket, session_id: str):
+    """WebSocket endpoint for live packet streaming."""
+    live_session = live_sessions.get(session_id)
+    if not live_session:
+        await websocket.close(code=4004, reason="Live session not found")
+        return
+
+    await websocket.accept()
+
+    # Send existing packets first
+    BATCH_SIZE = 100
+    for batch_start in range(0, live_session.total_packets, BATCH_SIZE):
+        batch = live_session.summaries[batch_start:batch_start + BATCH_SIZE]
+        await websocket.send_json({
+            "type": "packet_batch",
+            "packets": [p.to_dict() for p in batch],
+            "total": live_session.total_packets,
+            "batch_offset": batch_start,
+        })
+
+    # Subscribe to new packets
+    queue = live_session.subscribe()
+    try:
+        while True:
+            # Wait for new packets (with timeout to check for disconnect)
+            try:
+                batch = []
+                pkt = await asyncio.wait_for(queue.get(), timeout=0.1)
+                batch.append(pkt)
+                # Drain up to BATCH_SIZE more
+                while len(batch) < BATCH_SIZE:
+                    try:
+                        pkt = queue.get_nowait()
+                        batch.append(pkt)
+                    except asyncio.QueueEmpty:
+                        break
+
+                await websocket.send_json({
+                    "type": "packet_batch",
+                    "packets": [p.to_dict() for p in batch],
+                    "total": live_session.total_packets,
+                    "batch_offset": live_session.total_packets - len(batch),
+                    "live": True,
+                })
+            except asyncio.TimeoutError:
+                # Check if capture ended
+                if not live_session.is_running and queue.empty():
+                    await websocket.send_json({
+                        "type": "live_stopped",
+                        "total_packets": live_session.total_packets,
+                        "error": live_session.error,
+                    })
+                    break
+
+            # Handle incoming messages (get_detail, set_filter)
+            try:
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=0.01)
+                msg = json.loads(data)
+                if msg.get("action") == "get_detail":
+                    idx = msg.get("index", 0)
+                    if 0 <= idx < live_session.total_packets:
+                        summary = live_session.summaries[idx]
+                        raw = live_session.raw_packets[idx]
+                        flags = live_session.flags_list[idx]
+                        await websocket.send_json({
+                            "type": "packet_detail",
+                            "packet": summary.to_dict(),
+                            "raw_hex": raw.hex(),
+                            "flags": flags,
+                        })
+            except asyncio.TimeoutError:
+                pass
+            except Exception:
+                pass
+
+    except WebSocketDisconnect:
+        pass
+    finally:
+        live_session.unsubscribe(queue)
+
+
+
 # --- Health check ---
 
 

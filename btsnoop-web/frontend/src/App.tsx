@@ -1,4 +1,5 @@
 import React, { useReducer, useCallback, useRef, useState, useEffect } from 'react';
+type LiveState = { sessionId: string; device: string } | null;
 import { PacketList } from './components/PacketList';
 import { ProtocolTree } from './components/ProtocolTree';
 import { HexView } from './components/HexView';
@@ -18,6 +19,7 @@ const App: React.FC = () => {
   const wsClientRef = useRef<WebSocketClient | null>(null);
   const [showUpload, setShowUpload] = useState(true);
   const [globalDragging, setGlobalDragging] = useState(false);
+  const [liveState, setLiveState] = useState<LiveState>(null);
   const dragCountRef = useRef(0);
 
   // Global drag-and-drop overlay
@@ -124,8 +126,56 @@ const App: React.FC = () => {
       wsClientRef.current = null;
     }
     dispatch({ type: 'RESET' });
+    setLiveState(null);
     setShowUpload(true);
   }, [dispatch]);
+
+  const handleStartCapture = useCallback(async () => {
+    try {
+      const res = await fetch('/api/live/start', { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(`启动失败: ${err.detail}`);
+        return;
+      }
+      const data = await res.json();
+      dispatch({ type: 'RESET' });
+      setLiveState({ sessionId: data.session_id, device: data.device });
+      setShowUpload(false);
+
+      // Connect to live WebSocket
+      if (wsClientRef.current) wsClientRef.current.disconnect();
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const host = window.location.host;
+      const ws = new WebSocket(`${protocol}//${host}/ws/live/${data.session_id}`);
+      ws.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'packet_batch') {
+          dispatch({ type: 'ADD_PACKETS', packets: msg.packets });
+        } else if (msg.type === 'packet_detail') {
+          dispatch({ type: 'SET_DETAIL', detail: { packet: msg.packet, raw_hex: msg.raw_hex, flags: msg.flags } });
+        } else if (msg.type === 'live_stopped') {
+          setLiveState(null);
+          dispatch({ type: 'SET_WS_CONNECTED', connected: false });
+        }
+      };
+      ws.onopen = () => dispatch({ type: 'SET_WS_CONNECTED', connected: true });
+      ws.onclose = () => dispatch({ type: 'SET_WS_CONNECTED', connected: false });
+      dispatch({ type: 'SET_SESSION_ID', sessionId: data.session_id });
+    } catch (err) {
+      alert(`ADB 连接失败: ${err}`);
+    }
+  }, [dispatch]);
+
+  const handleStopCapture = useCallback(async () => {
+    if (!liveState) return;
+    try {
+      await fetch(`/api/live/stop/${liveState.sessionId}`, { method: 'POST' });
+    } catch (e) {
+      console.error('Stop error:', e);
+    }
+    setLiveState(null);
+  }, [liveState]);
 
   return (
     <PacketContext.Provider value={{ state, dispatch }}>
@@ -133,10 +183,10 @@ const App: React.FC = () => {
         {/* Toolbar */}
         <Toolbar
           onOpenFile={handleOpenFile}
-          onStartCapture={undefined}
-          onStopCapture={undefined}
+          onStartCapture={handleStartCapture}
+          onStopCapture={handleStopCapture}
           onExport={undefined}
-          isCapturing={false}
+          isCapturing={!!liveState}
         />
 
         {/* Main content */}

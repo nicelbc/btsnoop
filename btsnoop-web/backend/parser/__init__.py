@@ -69,6 +69,20 @@ def parse_packet(
     if session is None:
         session = SessionState()
 
+    try:
+        return _parse_packet_inner(data, flags, session)
+    except Exception as e:
+        return [DecodedLayer(
+            protocol="ERROR",
+            summary=f"Decode error: {e}",
+            fields=[DecodedField(name="raw_type", value=f"0x{data[0]:02x}" if data else "empty")],
+        )]
+
+
+def _parse_packet_inner(
+    data: bytes, flags: int, session: SessionState
+) -> List[DecodedLayer]:
+    """Internal parse implementation (may raise on malformed data)."""
     layers: List[DecodedLayer] = []
 
     if len(data) < 1:

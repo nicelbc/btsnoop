@@ -403,14 +403,14 @@ def parse_capabilities(data: bytes) -> list[str]:
         cat_len = data[i + 1]
         cat_data = data[i + 2 : i + 2 + cat_len]
 
-        if cat_id == 0x07 and cat_len >= 2:
+        if cat_id == 0x07 and cat_len >= 2 and len(cat_data) >= 2:
             # MEDIA_CODEC
             media_type = (cat_data[0] >> 4) & 0x0F
             codec_type = cat_data[1]
             codec_data = cat_data[2:]
             codec_info = parse_codec_capability(media_type, codec_type, codec_data)
             caps.append(f"Codec={codec_info}")
-        elif cat_id == 0x04 and cat_len >= 2:
+        elif cat_id == 0x04 and cat_len >= 2 and len(cat_data) >= 2:
             # CONTENT_PROTECTION
             cp_type = struct.unpack("<H", cat_data[0:2])[0]
             cp_name = CP_TYPES.get(cp_type, f"0x{cp_type:04X}")
