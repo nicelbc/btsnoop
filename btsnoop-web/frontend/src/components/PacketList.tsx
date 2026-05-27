@@ -76,6 +76,34 @@ export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
     [dispatch, onSelectPacket]
   );
 
+  // Keyboard navigation
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement) return;
+      if (filteredPackets.length === 0) return;
+
+      if (e.key === 'ArrowDown' || e.key === 'j') {
+        e.preventDefault();
+        const currentIdx = filteredPackets.findIndex(p => p.index === selectedIndex);
+        const nextIdx = Math.min(currentIdx + 1, filteredPackets.length - 1);
+        const pkt = filteredPackets[nextIdx];
+        dispatch({ type: 'SELECT_PACKET', index: pkt.index });
+        onSelectPacket(pkt.index);
+        virtualizer.scrollToIndex(nextIdx, { align: 'auto' });
+      } else if (e.key === 'ArrowUp' || e.key === 'k') {
+        e.preventDefault();
+        const currentIdx = filteredPackets.findIndex(p => p.index === selectedIndex);
+        const prevIdx = Math.max(currentIdx - 1, 0);
+        const pkt = filteredPackets[prevIdx];
+        dispatch({ type: 'SELECT_PACKET', index: pkt.index });
+        onSelectPacket(pkt.index);
+        virtualizer.scrollToIndex(prevIdx, { align: 'auto' });
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [filteredPackets, selectedIndex, dispatch, onSelectPacket, virtualizer]);
+
   const toggleAutoScroll = useCallback(() => {
     dispatch({ type: 'SET_AUTO_SCROLL', enabled: !autoScroll });
   }, [dispatch, autoScroll]);
