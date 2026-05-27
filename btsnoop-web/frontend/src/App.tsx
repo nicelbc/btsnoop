@@ -7,6 +7,7 @@ import { UploadZone, DropOverlay } from './components/UploadZone';
 import { Toolbar } from './components/Toolbar';
 import { FilterBar } from './components/FilterBar';
 import { StatusBar } from './components/StatusBar';
+import { StatsPanel } from './components/StatsPanel';
 import {
   PacketContext,
   packetReducer,
@@ -20,6 +21,7 @@ const App: React.FC = () => {
   const [showUpload, setShowUpload] = useState(true);
   const [globalDragging, setGlobalDragging] = useState(false);
   const [liveState, setLiveState] = useState<LiveState>(null);
+  const [showStats, setShowStats] = useState(false);
   const dragCountRef = useRef(0);
 
   // Global drag-and-drop overlay
@@ -177,6 +179,12 @@ const App: React.FC = () => {
     setLiveState(null);
   }, [liveState]);
 
+  const handleExport = useCallback(() => {
+    const sessionId = state.sessionId;
+    if (!sessionId) return;
+    window.open(`/api/sessions/${sessionId}/export/json`, '_blank');
+  }, [state.sessionId]);
+
   return (
     <PacketContext.Provider value={{ state, dispatch }}>
       <div className="h-screen flex flex-col bg-ws-bg">
@@ -185,7 +193,7 @@ const App: React.FC = () => {
           onOpenFile={handleOpenFile}
           onStartCapture={handleStartCapture}
           onStopCapture={handleStopCapture}
-          onExport={undefined}
+          onExport={handleExport}
           isCapturing={!!liveState}
         />
 
@@ -231,6 +239,31 @@ const App: React.FC = () => {
 
         {/* Status bar */}
         <StatusBar />
+
+        {/* Stats toggle button (floating) */}
+        {!showUpload && (
+          <button
+            onClick={() => setShowStats((v) => !v)}
+            title="Toggle statistics panel"
+            className={`fixed bottom-8 right-4 z-40 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium shadow-lg transition-colors border ${
+              showStats
+                ? 'bg-ws-accent/20 text-ws-accent border-ws-accent/40'
+                : 'bg-ws-panel text-gray-300 border-ws-border hover:bg-ws-hover hover:text-gray-100'
+            }`}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            Stats
+          </button>
+        )}
+
+        {/* Stats Panel */}
+        <StatsPanel
+          sessionId={state.sessionId}
+          visible={showStats}
+          onClose={() => setShowStats(false)}
+        />
 
         {/* Global drop overlay */}
         <DropOverlay visible={globalDragging && !showUpload} />

@@ -50,6 +50,8 @@ from . import avdtp
 from . import avrcp
 from . import att
 from . import smp
+from . import rfcomm
+from . import sdp
 
 
 def parse_packet(
@@ -153,18 +155,26 @@ def _parse_packet_inner(
                     layers.append(smp_layer)
 
             elif upper_proto == "SDP":
-                layers.append(DecodedLayer(
-                    protocol="SDP",
-                    summary=f"SDP len={len(upper_payload)}",
-                    payload=upper_payload,
-                ))
+                if len(upper_payload) >= 5:
+                    sdp_layer = sdp.decode(upper_payload)
+                    layers.append(sdp_layer)
+                else:
+                    layers.append(DecodedLayer(
+                        protocol="SDP",
+                        summary=f"SDP len={len(upper_payload)}",
+                        payload=upper_payload,
+                    ))
 
             elif upper_proto == "RFCOMM":
-                layers.append(DecodedLayer(
-                    protocol="RFCOMM",
-                    summary=f"RFCOMM len={len(upper_payload)}",
-                    payload=upper_payload,
-                ))
+                if len(upper_payload) >= 3:
+                    rfcomm_layer = rfcomm.decode(upper_payload)
+                    layers.append(rfcomm_layer)
+                else:
+                    layers.append(DecodedLayer(
+                        protocol="RFCOMM",
+                        summary=f"RFCOMM len={len(upper_payload)}",
+                        payload=upper_payload,
+                    ))
 
         return layers
 

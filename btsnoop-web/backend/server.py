@@ -595,6 +595,179 @@ async def websocket_live(websocket: WebSocket, session_id: str):
 
 
 
+# --- Export Endpoints ---
+
+
+@app.get("/api/sessions/{session_id}/export/json")
+async def export_json(
+    session_id: str,
+    filter_expr: Optional[str] = Query(default=None, alias="filter"),
+):
+    """
+    Export all packets (or filtered) as a JSON file download.
+    """
+    from fastapi.responses import StreamingResponse
+
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    # Determine which packets to export
+    if filter_expr:
+        error = validate_filter(filter_expr)
+        if error:
+            raise HTTPException(status_code=400, detail=f"Invalid filter: {error}")
+        filter_func = compile_filter(filter_expr)
+
+        packets = []
+        for i, summary in enumerate(session.summaries):
+            raw = session.get_raw_packet(i) or b""
+            if filter_func(summary, raw):
+                packets.append(summary.to_dict())
+    else:
+        packets = [s.to_dict() for s in session.summaries]
+
+    def generate():
+        yield json.dumps({"total": len(packets), "packets": packets}, indent=2)
+
+    return StreamingResponse(
+        generate(),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="btsnoop_export_{session_id[:8]}.json"'
+        },
+    )
+
+
+@app.get("/api/sessions/{session_id}/export/csv")
+async def export_csv(
+    session_id: str,
+    filter_expr: Optional[str] = Query(default=None, alias="filter"),
+):
+    """
+    Export all packets (or filtered) as a CSV file download.
+    Columns: index, timestamp, direction, protocol, length, summary
+    """
+    import csv as csv_module
+    from fastapi.responses import StreamingResponse
+
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    # Determine which packets to export
+    if filter_expr:
+        error = validate_filter(filter_expr)
+        if error:
+            raise HTTPException(status_code=400, detail=f"Invalid filter: {error}")
+        filter_func = compile_filter(filter_expr)
+
+        summaries = []
+        for i, summary in enumerate(session.summaries):
+            raw = session.get_raw_packet(i) or b""
+            if filter_func(summary, raw):
+                summaries.append(summary)
+    else:
+        summaries = list(session.summaries)
+
+    def generate():
+        output = io.StringIO()
+        writer = csv_module.writer(output)
+        # Header
+        writer.writerow(["index", "timestamp", "direction", "protocol", "length", "summary"])
+        yield output.getvalue()
+        output.seek(0)
+        output.truncate(0)
+
+        # Data rows
+        for s in summaries:
+            d = s.to_dict()
+            writer.writerow([
+                d.get("index", ""),
+                d.get("timestamp_str", ""),
+                d.get("direction", ""),
+                d.get("protocol", ""),
+                d.get("raw_length", ""),
+                d.get("summary", ""),
+            ])
+            yield output.getvalue()
+            output.seek(0)
+            output.truncate(0)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="btsnoop_export_{session_id[:8]}.csv"'
+        },
+    )
+
+
+# --- Statistics Endpoint ---
+
+
+@app.get("/api/sessions/{session_id}/stats")
+async def get_session_stats(session_id: str):
+    """
+    Return statistics for a session:
+    - total_packets
+    - protocols: count per protocol
+    - directions: sent vs received
+    - duration_ms: time from first to last packet
+    - packets_per_second: average rate
+    """
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    protocols: dict[str, int] = {}
+    directions: dict[str, int] = {"sent": 0, "received": 0}
+    first_ts: Optional[int] = None
+    last_ts: Optional[int] = None
+
+    for summary in session.summaries:
+        # Protocol counts
+        proto = summary.protocol
+        protocols[proto] = protocols.get(proto, 0) + 1
+
+        # Direction counts
+        direction_str = summary.direction
+        if direction_str in ("sent", "Sent", "SENT"):
+            directions["sent"] += 1
+        else:
+            directions["received"] += 1
+
+        # Timestamps (microseconds)
+        ts = summary.timestamp_us
+        if ts is not None:
+            if first_ts is None or ts < first_ts:
+                first_ts = ts
+            if last_ts is None or ts > last_ts:
+                last_ts = ts
+
+    # Duration in milliseconds
+    if first_ts is not None and last_ts is not None:
+        duration_ms = (last_ts - first_ts) // 1000
+    else:
+        duration_ms = 0
+
+    # Packets per second
+    if duration_ms > 0:
+        packets_per_second = round(session.total_packets / (duration_ms / 1000.0), 2)
+    else:
+        packets_per_second = 0
+
+    return JSONResponse(
+        content={
+            "total_packets": session.total_packets,
+            "protocols": protocols,
+            "directions": directions,
+            "duration_ms": duration_ms,
+            "packets_per_second": packets_per_second,
+        }
+    )
+
+
 # --- Health check ---
 
 
