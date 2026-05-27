@@ -151,34 +151,41 @@ const App: React.FC = () => {
     setShowUpload(true);
   }, [dispatch]);
 
-  const handleStartCapture = useCallback(async () => {
+  const startLiveSession = useCallback(async (endpoint: string) => {
     try {
-      // 先尝试真实 ADB 设备，失败则自动启动 Demo 模式
-      let res = await fetch('/api/live/start', { method: 'POST' });
+      const res = await fetch(endpoint, { method: 'POST' });
       if (!res.ok) {
-        // 没有设备，尝试 demo 模式
-        res = await fetch('/api/live/demo', { method: 'POST' });
-        if (!res.ok) {
-          const err = await res.json();
-          alert(`启动失败: ${err.detail}`);
-          return;
-        }
+        const err = await res.json();
+        alert(`启动失败: ${err.detail}`);
+        return;
       }
       const data = await res.json();
       dispatch({ type: 'RESET' });
       setLiveState({ sessionId: data.session_id, device: data.device });
       setShowUpload(false);
 
-      // Connect to live WebSocket (reuse WebSocketClient with live=true)
       if (wsClientRef.current) wsClientRef.current.disconnect();
       const client = new WebSocketClient(data.session_id, dispatch, true);
       client.connect();
       wsClientRef.current = client;
       dispatch({ type: 'SET_SESSION_ID', sessionId: data.session_id });
     } catch (err) {
-      alert(`ADB 连接失败: ${err}`);
+      alert(`连接失败: ${err}`);
     }
   }, [dispatch]);
+
+  const handleStartCapture = useCallback(async () => {
+    // 先检测是否有设备
+    const devRes = await fetch('/api/live/devices').then(r => r.json()).catch(() => ({ devices: [] }));
+    if (devRes.devices && devRes.devices.length > 0) {
+      await startLiveSession('/api/live/start');
+    } else {
+      const useDemo = confirm('未检测到 ADB 设备。\n\n是否启动 Demo 模式（模拟数据演示）？');
+      if (useDemo) {
+        await startLiveSession('/api/live/demo');
+      }
+    }
+  }, [startLiveSession]);
 
   const handleStopCapture = useCallback(async () => {
     if (!liveState) return;
@@ -213,6 +220,12 @@ const App: React.FC = () => {
           onExport={handleExport}
           isCapturing={!!liveState}
         />
+        {/* Demo mode banner */}
+        {liveState && liveState.device.includes('demo') && (
+          <div className="bg-yellow-900/50 border-b border-yellow-700/50 px-3 py-1 text-xs text-yellow-300 text-center">
+            Demo 模式 — 使用模拟数据演示，非真实设备抓包
+          </div>
+        )}
 
         {/* Main content */}
         {showUpload ? (
