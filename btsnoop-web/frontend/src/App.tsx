@@ -23,6 +23,7 @@ const App: React.FC = () => {
   const [liveState, setLiveState] = useState<LiveState>(null);
   const [showStats, setShowStats] = useState(false);
   const dragCountRef = useRef(0);
+  const handleOpenFileRef = useRef<(file: File) => void>(() => {});
 
   // Global drag-and-drop overlay
   useEffect(() => {
@@ -50,6 +51,10 @@ const App: React.FC = () => {
       e.preventDefault();
       dragCountRef.current = 0;
       setGlobalDragging(false);
+      const files = e.dataTransfer?.files;
+      if (files && files.length > 0) {
+        handleOpenFileRef.current(files[0]);
+      }
     };
 
     document.addEventListener('dragenter', handleDragEnter);
@@ -121,6 +126,7 @@ const App: React.FC = () => {
     },
     [dispatch, handleSessionCreated]
   );
+  handleOpenFileRef.current = handleOpenFile;
 
   const handleNewFile = useCallback(() => {
     if (wsClientRef.current) {
