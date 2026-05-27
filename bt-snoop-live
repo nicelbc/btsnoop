@@ -924,6 +924,26 @@ def process_live(serial=None, layer_filter=None, hide_noisy=True):
             pass
 
 
+def start_web_mode(port=8000):
+    """启动 Web UI 模式"""
+    import webbrowser
+    web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'btsnoop-web', 'backend')
+    if not os.path.isdir(web_dir):
+        print("{}错误: 未找到 btsnoop-web/backend 目录{}".format(C.RED, C.RST))
+        print("请确保在项目根目录下运行，或先安装 Web 组件")
+        sys.exit(1)
+    print("{}╔══════════════════════════════════════╗{}".format(C.CYN, C.RST))
+    print("{}║   bt-snoop-live Web UI Mode          ║{}".format(C.CYN, C.RST))
+    print("{}╚══════════════════════════════════════╝{}".format(C.CYN, C.RST))
+    print()
+    print("  启动 Web 服务: {}http://localhost:{}{}".format(C.GRN, port, C.RST))
+    print("  按 Ctrl+C 停止")
+    print()
+    webbrowser.open(f"http://localhost:{port}")
+    os.chdir(web_dir)
+    os.execvp('python3', ['python3', 'server.py'])
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='蓝牙 btsnoop 实时解析工具（Wireshark 终端版）',
@@ -943,7 +963,13 @@ def main():
     parser.add_argument('-s', '--serial', help='adb 设备序列号')
     parser.add_argument('--filter', help='协议层过滤（逗号分隔）')
     parser.add_argument('--show-noisy', action='store_true', help='显示高频事件 (Num_Completed_Pkts)')
+    parser.add_argument('--web', action='store_true', help='启动 Web UI 模式')
+    parser.add_argument('--port', type=int, default=8000, help='Web 服务端口 (默认 8000)')
     args = parser.parse_args()
+
+    if args.web:
+        start_web_mode(args.port)
+        return
 
     layer_filter = None
     if args.filter:
