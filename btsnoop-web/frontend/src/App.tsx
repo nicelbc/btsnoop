@@ -103,11 +103,22 @@ const App: React.FC = () => {
     [dispatch]
   );
 
-  const handleSelectPacket = useCallback((index: number) => {
-    if (wsClientRef.current) {
-      wsClientRef.current.requestDetail(index);
+  const handleSelectPacket = useCallback(async (index: number) => {
+    const sessionId = state.sessionId;
+    if (!sessionId) return;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/packets/${index}`);
+      if (res.ok) {
+        const data = await res.json();
+        dispatch({
+          type: 'SET_DETAIL',
+          detail: { packet: data.packet, raw_hex: data.raw_hex, flags: data.flags },
+        });
+      }
+    } catch (err) {
+      console.error('Failed to fetch packet detail:', err);
     }
-  }, []);
+  }, [state.sessionId, dispatch]);
 
   const handleOpenFile = useCallback(
     (file: File) => {
