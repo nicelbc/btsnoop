@@ -38,13 +38,18 @@ export const UploadZone: React.FC<UploadZoneProps> = ({ onSessionCreated }) => {
               try {
                 resolve(JSON.parse(xhr.responseText));
               } catch {
-                reject(new Error('Invalid response from server'));
+                reject(new Error('服务器返回格式错误'));
               }
             } else {
-              reject(new Error(`Upload failed: ${xhr.statusText}`));
+              try {
+                const errData = JSON.parse(xhr.responseText);
+                reject(new Error(errData.detail || `上传失败 (${xhr.status})`));
+              } catch {
+                reject(new Error(`上传失败: ${xhr.status} ${xhr.statusText}`));
+              }
             }
           };
-          xhr.onerror = () => reject(new Error('Network error'));
+          xhr.onerror = () => reject(new Error('网络错误: 请确认后端服务已启动 (端口 8000)'));
           xhr.open('POST', '/api/upload');
           xhr.send(formData);
         });
