@@ -5,39 +5,44 @@ import { PacketSummary, PacketDetail } from '../../types';
 const samplePackets: PacketSummary[] = [
   {
     index: 0,
-    timestamp: 0.0001,
+    timestamp_us: 100,
+    timestamp: '0.000100',
     direction: 'sent',
-    type: 'HCI Command',
     protocol: 'HCI CMD',
     summary: 'Reset',
-    length: 3,
+    raw_length: 3,
+    included_length: 3,
+    layers: [],
   },
   {
     index: 1,
-    timestamp: 0.0012,
+    timestamp_us: 1200,
+    timestamp: '0.001200',
     direction: 'received',
-    type: 'HCI Event',
     protocol: 'HCI EVT',
     summary: 'Command Complete',
-    length: 7,
+    raw_length: 7,
+    included_length: 7,
+    layers: [],
   },
 ];
 
 const morePackets: PacketSummary[] = [
   {
     index: 2,
-    timestamp: 0.0023,
+    timestamp_us: 2300,
+    timestamp: '0.002300',
     direction: 'sent',
-    type: 'ACL Data',
     protocol: 'L2CAP',
     summary: 'Data',
-    length: 20,
+    raw_length: 20,
+    included_length: 20,
+    layers: [],
   },
 ];
 
 describe('packetStore reducer', () => {
   it('ADD_PACKETS action appends packets', () => {
-    // Start with some packets already in state
     const stateWithPackets: PacketState = {
       ...initialState,
       packets: samplePackets,
@@ -107,7 +112,11 @@ describe('packetStore reducer', () => {
     const modifiedState: PacketState = {
       packets: samplePackets,
       selectedIndex: 1,
-      selectedDetail: { index: 1, layers: [], raw_hex: 'aabb' },
+      selectedDetail: {
+        packet: samplePackets[1],
+        raw_hex: 'aabb',
+        flags: 0,
+      },
       filter: 'hci.type',
       wsConnected: true,
       sessionId: 'sess-123',
@@ -130,17 +139,9 @@ describe('packetStore reducer', () => {
 
   it('SET_DETAIL sets the packet detail', () => {
     const detail: PacketDetail = {
-      index: 0,
-      layers: [
-        {
-          protocol: 'HCI',
-          summary: 'Command',
-          fields: [{ name: 'opcode', value: '0x0c03', offset: 0, length: 2 }],
-          payload_offset: 3,
-          payload_length: 0,
-        },
-      ],
+      packet: samplePackets[0],
       raw_hex: '030c00',
+      flags: 0,
     };
 
     const newState = packetReducer(initialState, {
