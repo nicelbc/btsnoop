@@ -11,17 +11,18 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.10.9",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "@tanstack/react-virtual": "^3.10.9"
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@testing-library/jest-dom": "^6.4.2",
+    "@testing-library/react": "^14.2.1",
+    "@testing-library/user-event": "^14.5.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
-    "@testing-library/react": "^14.2.1",
-    "@testing-library/jest-dom": "^6.4.2",
-    "@testing-library/user-event": "^14.5.2",
     "@vitest/coverage-v8": "^1.6.0",
     "autoprefixer": "^10.4.20",
     "jsdom": "^24.0.0",

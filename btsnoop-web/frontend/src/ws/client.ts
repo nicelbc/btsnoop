@@ -9,6 +9,7 @@ export class WebSocketClient {
   private filterPending = false;
   private filterVersion = 0;
   private activeFilterVersion = 0;
+  private lastFilter = '';
   private wsPath: string;
 
   constructor(sessionId: string, dispatch: React.Dispatch<PacketAction>, live = false) {
@@ -29,6 +30,9 @@ export class WebSocketClient {
       if (this.reconnectTimer) {
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = null;
+      }
+      if (this.lastFilter) {
+        this.send({ action: 'set_filter', expression: this.lastFilter });
       }
     };
 
@@ -114,6 +118,7 @@ export class WebSocketClient {
   }
 
   setFilter(expression: string): void {
+    this.lastFilter = expression;
     this.filterVersion++;
     this.filterPending = false;
     this.dispatch({ type: 'SET_PACKETS', packets: [] });
