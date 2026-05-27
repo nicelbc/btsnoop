@@ -3,6 +3,7 @@ import { PacketSummary, PacketDetail } from '../types';
 
 export interface PacketState {
   packets: PacketSummary[];
+  totalPackets: number;
   selectedIndex: number | null;
   selectedDetail: PacketDetail | null;
   filter: string;
@@ -26,6 +27,7 @@ export type PacketAction =
 
 export const initialState: PacketState = {
   packets: [],
+  totalPackets: 0,
   selectedIndex: null,
   selectedDetail: null,
   filter: '',
@@ -37,8 +39,11 @@ export const initialState: PacketState = {
 
 export function packetReducer(state: PacketState, action: PacketAction): PacketState {
   switch (action.type) {
-    case 'ADD_PACKETS':
-      return { ...state, packets: [...state.packets, ...action.packets] };
+    case 'ADD_PACKETS': {
+      const newPackets = [...state.packets, ...action.packets];
+      const newTotal = state.filter ? state.totalPackets : newPackets.length;
+      return { ...state, packets: newPackets, totalPackets: newTotal };
+    }
     case 'SET_PACKETS':
       return { ...state, packets: action.packets };
     case 'SELECT_PACKET':

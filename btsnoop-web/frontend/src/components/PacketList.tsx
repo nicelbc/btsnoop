@@ -37,7 +37,7 @@ interface PacketListProps {
 
 export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
   const { state, dispatch } = usePacketStore();
-  const { packets, selectedIndex, autoScroll, filter } = state;
+  const { packets, selectedIndex, autoScroll, filter, totalPackets } = state;
   const [ctxMenu, setCtxMenu] = useState<ContextMenuState>(initialContextMenu);
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -105,7 +105,7 @@ export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
     <div className="panel flex flex-col h-full">
       {/* Header */}
       <div className="panel-header">
-        <span>Packet List ({filteredPackets.length} packets)</span>
+        <span>Packet List ({filter && totalPackets > 0 ? `${filteredPackets.length}/${totalPackets}` : filteredPackets.length} packets)</span>
         <div className="flex items-center gap-2">
           <button
             onClick={toggleAutoScroll}

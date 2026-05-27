@@ -9,6 +9,8 @@ const KNOWN_FIELDS = [
   'att.opcode',
   'avdtp.signal',
   'direction',
+  'protocol',
+  'index',
   'bt.addr',
 ];
 
@@ -60,9 +62,9 @@ function validateFilter(expr: string): boolean {
     const last = tokens[tokens.length - 1];
     if (['&&', '||'].includes(first) || ['&&', '||'].includes(last)) return false;
 
-    // Must contain at least one known field or a dot-notation field
+    // Must contain at least one known field or a field-like identifier
     const hasField = tokens.some(
-      (t) => KNOWN_FIELDS.includes(t) || /^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)+$/i.test(t)
+      (t) => KNOWN_FIELDS.includes(t) || /^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)*$/i.test(t)
     );
     if (!hasField) return false;
 
