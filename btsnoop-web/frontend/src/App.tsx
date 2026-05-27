@@ -6,8 +6,10 @@ import { HexView } from './components/HexView';
 import { UploadZone, DropOverlay } from './components/UploadZone';
 import { Toolbar } from './components/Toolbar';
 import { FilterBar } from './components/FilterBar';
+import { ProtoFilterBar } from './components/ProtoFilterBar';
 import { StatusBar } from './components/StatusBar';
 import { StatsPanel } from './components/StatsPanel';
+import { ResizablePanel } from './components/ResizablePanel';
 import {
   PacketContext,
   packetReducer,
@@ -220,32 +222,41 @@ const App: React.FC = () => {
           <>
             {/* Filter Bar */}
             <FilterBar />
+            {/* Protocol Quick Filter */}
+            <ProtoFilterBar />
 
-            <div className="flex-1 flex flex-col min-h-0">
-              {/* Top panel: Packet List */}
-              <div className="h-[45%] min-h-0 p-1">
-                <PacketList onSelectPacket={handleSelectPacket} />
-              </div>
-
-              {/* Resizer bar */}
-              <div className="h-1 bg-ws-border cursor-row-resize hover:bg-ws-accent/50 transition-colors shrink-0" />
-
-              {/* Bottom panel: Protocol Tree + Hex View side by side */}
-              <div className="flex-1 flex min-h-0 p-1 gap-1">
-                {/* Protocol Tree */}
-                <div className="w-1/2 min-w-0">
-                  <ProtocolTree />
+            {/* Main panels with real drag-resize */}
+            <ResizablePanel
+              direction="vertical"
+              initialRatio={0.45}
+              minRatio={0.2}
+              maxRatio={0.8}
+              className="flex-1 min-h-0"
+              first={
+                <div className="h-full p-1">
+                  <PacketList onSelectPacket={handleSelectPacket} />
                 </div>
-
-                {/* Vertical resizer */}
-                <div className="w-1 bg-ws-border cursor-col-resize hover:bg-ws-accent/50 transition-colors shrink-0" />
-
-                {/* Hex View */}
-                <div className="w-1/2 min-w-0">
-                  <HexView />
-                </div>
-              </div>
-            </div>
+              }
+              second={
+                <ResizablePanel
+                  direction="horizontal"
+                  initialRatio={0.5}
+                  minRatio={0.2}
+                  maxRatio={0.8}
+                  className="h-full p-1"
+                  first={
+                    <div className="h-full">
+                      <ProtocolTree />
+                    </div>
+                  }
+                  second={
+                    <div className="h-full">
+                      <HexView />
+                    </div>
+                  }
+                />
+              }
+            />
           </>
         )}
 
