@@ -6,6 +6,7 @@ export class WebSocketClient {
   private dispatch: React.Dispatch<PacketAction>;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionId: string;
+  private filterPending = false;
 
   constructor(sessionId: string, dispatch: React.Dispatch<PacketAction>) {
     this.sessionId = sessionId;
@@ -50,13 +51,22 @@ export class WebSocketClient {
   private handleMessage(msg: WsMessage): void {
     switch (msg.type) {
       case 'packet_batch':
-        this.dispatch({ type: 'ADD_PACKETS', packets: msg.packets });
+        if (this.filterPending) {
+          this.dispatch({ type: 'SET_PACKETS', packets: msg.packets });
+          this.filterPending = false;
+        } else {
+          this.dispatch({ type: 'ADD_PACKETS', packets: msg.packets });
+        }
         break;
       case 'packet_detail':
         this.dispatch({
           type: 'SET_DETAIL',
           detail: { packet: msg.packet, raw_hex: msg.raw_hex, flags: msg.flags },
         });
+        break;
+      case 'filter_applied':
+        this.filterPending = true;
+        this.dispatch({ type: 'SET_PACKETS', packets: [] });
         break;
       case 'connected':
         this.dispatch({ type: 'SET_SESSION_ID', sessionId: msg.session_id });

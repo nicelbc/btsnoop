@@ -222,11 +222,11 @@ def decode_hci_command(data: bytes) -> DecodedLayer:
     name = get_opcode_name(opcode)
 
     fields = [
-        DecodedField("opcode", f"0x{opcode:04X}", raw=data[1:3]),
-        DecodedField("ogf", ogf),
-        DecodedField("ocf", ocf),
-        DecodedField("name", name),
-        DecodedField("param_length", param_len),
+        DecodedField("opcode", f"0x{opcode:04X}", offset=1, length=2, raw=data[1:3]),
+        DecodedField("ogf", ogf, offset=1, length=2),
+        DecodedField("ocf", ocf, offset=1, length=2),
+        DecodedField("name", name, offset=1, length=2),
+        DecodedField("param_length", param_len, offset=3, length=1),
     ]
 
     # Decode specific commands
@@ -235,14 +235,14 @@ def decode_hci_command(data: bytes) -> DecodedLayer:
     if opcode == 0x0405 and len(params) >= 6:
         # Create_Connection: BD_ADDR(6) + ...
         addr = ":".join(f"{b:02x}" for b in reversed(params[0:6]))
-        fields.append(DecodedField("bd_addr", addr))
+        fields.append(DecodedField("bd_addr", addr, offset=4, length=6))
 
     elif opcode == 0x0406 and len(params) >= 3:
         # Disconnect: handle(2) + reason(1)
         handle = struct.unpack("<H", params[0:2])[0]
         reason = params[2]
-        fields.append(DecodedField("handle", f"0x{handle:04X}"))
-        fields.append(DecodedField("reason", f"0x{reason:02X}"))
+        fields.append(DecodedField("handle", f"0x{handle:04X}", offset=4, length=2))
+        fields.append(DecodedField("reason", f"0x{reason:02X}", offset=6, length=1))
 
     summary = f"{name} (0x{opcode:04X}) plen={param_len}"
     return DecodedLayer(
@@ -273,9 +273,9 @@ def decode_hci_event(data: bytes) -> DecodedLayer:
     params = data[3 : 3 + param_len] if len(data) >= 3 + param_len else data[3:]
 
     fields = [
-        DecodedField("event_code", f"0x{evt_code:02X}"),
-        DecodedField("name", evt_name),
-        DecodedField("param_length", param_len),
+        DecodedField("event_code", f"0x{evt_code:02X}", offset=1, length=1),
+        DecodedField("name", evt_name, offset=1, length=1),
+        DecodedField("param_length", param_len, offset=2, length=1),
     ]
 
     summary = f"{evt_name} plen={param_len}"

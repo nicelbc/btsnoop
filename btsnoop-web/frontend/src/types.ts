@@ -46,6 +46,13 @@ export interface WsPacketDetail {
   flags: number;
 }
 
+export interface WsFilterApplied {
+  type: 'filter_applied';
+  expression: string;
+  matched: number;
+  total: number;
+}
+
 export interface WsError {
   type: 'error';
   message: string;
@@ -57,7 +64,7 @@ export interface WsConnected {
   total_packets: number;
 }
 
-export type WsMessage = WsPacketBatch | WsPacketDetail | WsError | WsConnected;
+export type WsMessage = WsPacketBatch | WsPacketDetail | WsFilterApplied | WsError | WsConnected;
 
 // Commands sent to server
 export interface CmdGetDetail {
