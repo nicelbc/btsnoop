@@ -26,9 +26,8 @@ function getProtocolColor(protocol: string): string {
   return PROTOCOL_COLORS[protocol] || 'border-l-proto-default text-proto-default';
 }
 
-function formatTimestamp(ts: number): string {
-  const seconds = ts.toFixed(6);
-  return seconds;
+function formatTimestamp(ts: string): string {
+  return ts;
 }
 
 interface PacketListProps {
@@ -48,8 +47,7 @@ export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
     return packets.filter(
       (p) =>
         p.protocol.toLowerCase().includes(lowerFilter) ||
-        p.summary.toLowerCase().includes(lowerFilter) ||
-        p.type.toLowerCase().includes(lowerFilter)
+        p.summary.toLowerCase().includes(lowerFilter)
     );
   }, [packets, filter]);
 
@@ -157,7 +155,7 @@ export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
               >
                 <span className="w-14 shrink-0 text-gray-500">{packet.index}</span>
                 <span className="w-24 shrink-0 text-gray-400">
-                  {formatTimestamp(packet.timestamp)}
+                  {formatTimestamp(packet.timestamp || '')}
                 </span>
                 <span className="w-8 shrink-0 text-center">
                   {packet.direction === 'sent' ? (
@@ -171,7 +169,7 @@ export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
                   )}
                 </span>
                 <span className="w-20 shrink-0 font-semibold">{packet.protocol}</span>
-                <span className="w-12 shrink-0 text-right text-gray-500">{packet.length}</span>
+                <span className="w-12 shrink-0 text-right text-gray-500">{packet.raw_length}</span>
                 <span className="flex-1 ml-3 text-gray-300 truncate">{packet.summary}</span>
               </div>
             );

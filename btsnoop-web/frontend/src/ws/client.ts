@@ -53,7 +53,10 @@ export class WebSocketClient {
         this.dispatch({ type: 'ADD_PACKETS', packets: msg.packets });
         break;
       case 'packet_detail':
-        this.dispatch({ type: 'SET_DETAIL', detail: msg.detail });
+        this.dispatch({
+          type: 'SET_DETAIL',
+          detail: { packet: msg.packet, raw_hex: msg.raw_hex, flags: msg.flags },
+        });
         break;
       case 'connected':
         this.dispatch({ type: 'SET_SESSION_ID', sessionId: msg.session_id });
@@ -79,11 +82,15 @@ export class WebSocketClient {
   }
 
   requestDetail(index: number): void {
-    this.send({ cmd: 'get_detail', index });
+    this.send({ action: 'get_detail', index });
   }
 
-  setFilter(filter: string): void {
-    this.send({ cmd: 'set_filter', filter });
+  setFilter(expression: string): void {
+    this.send({ action: 'set_filter', expression });
+  }
+
+  getPackets(offset: number, limit: number): void {
+    this.send({ action: 'get_packets', offset, limit });
   }
 
   disconnect(): void {

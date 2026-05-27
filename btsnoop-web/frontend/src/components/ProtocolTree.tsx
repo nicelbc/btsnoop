@@ -216,7 +216,7 @@ export const ProtocolTree: React.FC = () => {
   const expandAll = () => {
     if (!state.selectedDetail) return;
     const newState: TreeNodeState = {};
-    state.selectedDetail.layers.forEach((layer, li) => {
+    state.selectedDetail.packet.layers.forEach((layer: DecodedLayer, li: number) => {
       newState[`layer-${li}`] = true;
       const expandFields = (fields: DecodedField[], prefix: string) => {
         fields.forEach((f, fi) => {
@@ -257,8 +257,8 @@ export const ProtocolTree: React.FC = () => {
         <span>Protocol Decode</span>
         <div className="flex items-center gap-2">
           <span className="text-[10px] text-gray-500">
-            {selectedDetail.layers.length} layer
-            {selectedDetail.layers.length !== 1 ? 's' : ''} | #{selectedDetail.index}
+            {selectedDetail.packet.layers.length} layer
+            {selectedDetail.packet.layers.length !== 1 ? 's' : ''} | #{selectedDetail.packet.index}
           </span>
           <button
             onClick={expandAll}
@@ -277,7 +277,7 @@ export const ProtocolTree: React.FC = () => {
         </div>
       </div>
       <div className="flex-1 overflow-y-auto font-mono text-xs" role="tree">
-        {selectedDetail.layers.map((layer, idx) => (
+        {selectedDetail.packet.layers.map((layer, idx) => (
           <LayerNode
             key={`layer-${idx}`}
             layer={layer}

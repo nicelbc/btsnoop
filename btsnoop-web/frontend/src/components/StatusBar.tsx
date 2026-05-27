@@ -77,7 +77,7 @@ export const StatusBar: React.FC = () => {
             {' | '}
             <span className="text-gray-300">{selectedPacket.protocol}</span>
             {' | '}
-            <span className="text-gray-300">{selectedPacket.length} bytes</span>
+            <span className="text-gray-300">{selectedPacket.raw_length} bytes</span>
             {' | '}
             <span className="text-gray-400 truncate">{selectedPacket.summary}</span>
           </span>

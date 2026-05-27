@@ -1,11 +1,13 @@
 export interface PacketSummary {
   index: number;
-  timestamp: number;
+  timestamp_us: number;
+  timestamp: string;
   direction: 'sent' | 'received';
-  type: string;
   protocol: string;
   summary: string;
-  length: number;
+  raw_length: number;
+  included_length: number;
+  layers: DecodedLayer[];
 }
 
 export interface DecodedField {
@@ -25,9 +27,9 @@ export interface DecodedLayer {
 }
 
 export interface PacketDetail {
-  index: number;
-  layers: DecodedLayer[];
+  packet: PacketSummary;
   raw_hex: string;
+  flags: number;
 }
 
 // WebSocket message types
@@ -38,7 +40,9 @@ export interface WsPacketBatch {
 
 export interface WsPacketDetail {
   type: 'packet_detail';
-  detail: PacketDetail;
+  packet: PacketSummary;
+  raw_hex: string;
+  flags: number;
 }
 
 export interface WsError {
@@ -56,13 +60,19 @@ export type WsMessage = WsPacketBatch | WsPacketDetail | WsError | WsConnected;
 
 // Commands sent to server
 export interface CmdGetDetail {
-  cmd: 'get_detail';
+  action: 'get_detail';
   index: number;
 }
 
 export interface CmdSetFilter {
-  cmd: 'set_filter';
-  filter: string;
+  action: 'set_filter';
+  expression: string;
 }
 
-export type WsCommand = CmdGetDetail | CmdSetFilter;
+export interface CmdGetPackets {
+  action: 'get_packets';
+  offset: number;
+  limit: number;
+}
+
+export type WsCommand = CmdGetDetail | CmdSetFilter | CmdGetPackets;

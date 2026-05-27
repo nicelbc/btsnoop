@@ -29,15 +29,25 @@ class DecodedField:
     """A single decoded field within a protocol layer."""
     name: str
     value: Any
+    offset: int = 0
+    length: int = 0
     raw: Optional[bytes] = None
     description: str = ""
+    children: list['DecodedField'] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        result = {"name": self.name, "value": self.value}
+        result = {
+            "name": self.name,
+            "value": self.value,
+            "offset": self.offset,
+            "length": self.length,
+        }
         if self.description:
             result["description"] = self.description
         if self.raw is not None:
             result["raw"] = self.raw.hex()
+        if self.children:
+            result["children"] = [c.to_dict() for c in self.children]
         return result
 
 
