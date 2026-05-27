@@ -7,6 +7,8 @@ export class WebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionId: string;
   private filterPending = false;
+  private filterVersion = 0;
+  private activeFilterVersion = 0;
   private wsPath: string;
 
   constructor(sessionId: string, dispatch: React.Dispatch<PacketAction>, live = false) {
@@ -56,10 +58,15 @@ export class WebSocketClient {
       case 'packet_batch':
         if (this.filterPending) {
           // First batch after filter: replace all packets
-          this.dispatch({ type: 'SET_PACKETS', packets: msg.packets });
+          if (this.activeFilterVersion === this.filterVersion) {
+            this.dispatch({ type: 'SET_PACKETS', packets: msg.packets });
+          }
           this.filterPending = false;
         } else {
-          this.dispatch({ type: 'ADD_PACKETS', packets: msg.packets });
+          // Only accept if this is from the current filter version
+          if (this.activeFilterVersion === this.filterVersion) {
+            this.dispatch({ type: 'ADD_PACKETS', packets: msg.packets });
+          }
         }
         break;
       case 'packet_detail':
@@ -69,6 +76,7 @@ export class WebSocketClient {
         });
         break;
       case 'filter_applied':
+        this.activeFilterVersion = this.filterVersion;
         this.filterPending = true;
         this.dispatch({ type: 'SET_PACKETS', packets: [] });
         break;
@@ -106,6 +114,9 @@ export class WebSocketClient {
   }
 
   setFilter(expression: string): void {
+    this.filterVersion++;
+    this.filterPending = false;
+    this.dispatch({ type: 'SET_PACKETS', packets: [] });
     this.send({ action: 'set_filter', expression });
   }
 
