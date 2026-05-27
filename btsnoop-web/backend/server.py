@@ -567,9 +567,9 @@ async def _run_demo_capture(live_session: LiveSession):
                 live_session.add_packet(rec.data, rec.flags, pkt_summary)
                 packet_index += 1
 
-                # Simulate real-time: delay every few packets
-                if packet_index % random.randint(5, 15) == 0:
-                    await asyncio.sleep(random.uniform(0.2, 0.8))
+                # Simulate real-time: small delay every batch of packets
+                if packet_index % random.randint(30, 60) == 0:
+                    await asyncio.sleep(random.uniform(0.05, 0.15))
 
         # All packets sent, mark as done
         live_session.is_running = False

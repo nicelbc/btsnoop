@@ -131,8 +131,15 @@ export const PacketList: React.FC<PacketListProps> = ({ onSelectPacket }) => {
         <span className="flex-1 ml-3">Info / Summary</span>
       </div>
 
+      {/* Empty state */}
+      {filteredPackets.length === 0 && (
+        <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
+          {filter ? '当前过滤条件无匹配包（数据仍在加载中...）' : '等待数据...'}
+        </div>
+      )}
+
       {/* Virtual List */}
-      <div ref={parentRef} className="flex-1 overflow-auto">
+      <div ref={parentRef} className={`flex-1 overflow-auto ${filteredPackets.length === 0 ? 'hidden' : ''}`}>
         <div
           style={{
             height: `${virtualizer.getTotalSize()}px`,
