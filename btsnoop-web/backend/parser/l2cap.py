@@ -235,8 +235,8 @@ def decode(
     l2cap_payload = data[4 : 4 + l2cap_len] if len(data) >= 4 + l2cap_len else data[4:]
 
     fields = [
-        DecodedField("length", l2cap_len),
-        DecodedField("cid", f"0x{cid:04X}"),
+        DecodedField("length", l2cap_len, offset=0, length=2),
+        DecodedField("cid", f"0x{cid:04X}", offset=2, length=2),
     ]
 
     # Determine upper protocol from CID
