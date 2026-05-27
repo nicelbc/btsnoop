@@ -471,6 +471,24 @@ async def list_adb_devices():
     return {"devices": devices}
 
 
+@app.post("/api/live/demo")
+async def start_demo():
+    """Start a demo live session (no device needed). Replays sample data with delays."""
+    import uuid
+    session_id = str(uuid.uuid4())
+    live_session = LiveSession(session_id=session_id, serial="demo")
+    live_sessions[session_id] = live_session
+
+    task = asyncio.create_task(_run_demo_capture(live_session))
+    live_session._task = task
+
+    return {
+        "session_id": session_id,
+        "device": "demo (模拟)",
+        "status": "capturing",
+    }
+
+
 @app.post("/api/live/start")
 async def start_live(serial: Optional[str] = None):
     """Start live ADB capture. Returns session_id for WebSocket connection."""
@@ -493,6 +511,72 @@ async def start_live(serial: Optional[str] = None):
         "device": device_serial,
         "status": "capturing",
     }
+
+
+async def _run_demo_capture(live_session: LiveSession):
+    """Replay sample btsnoop data with delays to simulate live capture."""
+    import random
+    from parser.btsnoop import BtSnoopReader
+    from parser.models import Direction
+
+    live_session.is_running = True
+
+    # Use real cfa file first (more data), fallback to sample
+    demo_files = [
+        "/home/mi/myfile/btools_back20230810/hcidump_2024-03-15-15-31-22-105460.cfa",
+        os.path.join(os.path.dirname(__file__), "tests", "sample.btsnoop"),
+    ]
+    demo_file = None
+    for f in demo_files:
+        if os.path.exists(f):
+            demo_file = f
+            break
+
+    if not demo_file:
+        live_session.error = "未找到 demo 数据文件"
+        live_session.is_running = False
+        return
+
+    try:
+        with open(demo_file, 'rb') as f:
+            reader = BtSnoopReader(f)
+            session_state = live_session.session_state
+            packet_index = 0
+
+            for rec in reader:
+                if not live_session.is_running:
+                    break
+
+                layers = parse_packet(rec.data, rec.flags, session_state)
+                protocol = layers[-1].protocol if layers else "HCI"
+                summary_text = layers[-1].summary if layers else ""
+
+                pkt_summary = PacketSummary(
+                    index=packet_index,
+                    timestamp_us=rec.timestamp_us,
+                    timestamp_str=rec.timestamp_str,
+                    direction=rec.direction,
+                    protocol=protocol,
+                    summary=summary_text,
+                    layers=layers,
+                    raw_length=rec.original_length,
+                    included_length=rec.included_length,
+                )
+                live_session.add_packet(rec.data, rec.flags, pkt_summary)
+                packet_index += 1
+
+                # Simulate real-time: delay every few packets
+                if packet_index % random.randint(5, 15) == 0:
+                    await asyncio.sleep(random.uniform(0.2, 0.8))
+
+        # All packets sent, mark as done
+        live_session.is_running = False
+
+    except asyncio.CancelledError:
+        live_session.is_running = False
+    except Exception as e:
+        live_session.error = str(e)
+        live_session.is_running = False
 
 
 @app.post("/api/live/stop/{session_id}")

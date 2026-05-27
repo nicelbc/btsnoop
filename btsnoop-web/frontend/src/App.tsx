@@ -153,11 +153,16 @@ const App: React.FC = () => {
 
   const handleStartCapture = useCallback(async () => {
     try {
-      const res = await fetch('/api/live/start', { method: 'POST' });
+      // 先尝试真实 ADB 设备，失败则自动启动 Demo 模式
+      let res = await fetch('/api/live/start', { method: 'POST' });
       if (!res.ok) {
-        const err = await res.json();
-        alert(`启动失败: ${err.detail}`);
-        return;
+        // 没有设备，尝试 demo 模式
+        res = await fetch('/api/live/demo', { method: 'POST' });
+        if (!res.ok) {
+          const err = await res.json();
+          alert(`启动失败: ${err.detail}`);
+          return;
+        }
       }
       const data = await res.json();
       dispatch({ type: 'RESET' });
