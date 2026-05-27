@@ -1,0 +1,452 @@
+"""
+FastAPI server for btsnoop online parser web tool.
+
+Endpoints:
+  POST   /api/upload                          - Upload btsnoop file, parse and store
+  GET    /api/sessions/{session_id}/packets   - REST fallback: paginated packet list
+  GET    /api/sessions/{session_id}/packets/{index} - Get full decode for one packet
+  WS     /ws/{session_id}                     - Stream packets with filtering
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import json
+import sys
+import time
+from contextlib import asynccontextmanager
+from typing import Optional
+
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+# Parser imports
+from parser.btsnoop import BtSnoopReader
+from parser.models import PacketSummary, DecodedLayer, SessionState, Direction
+from parser import parse_packet
+
+# Local imports
+from session import Session, SessionManager
+from filter_engine import compile_filter, validate_filter, FilterParseError
+
+
+# --- Application lifespan ---
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage startup/shutdown lifecycle."""
+    # Startup: begin session cleanup loop
+    await session_manager.start_cleanup_loop(interval=60.0)
+    print("[Server] Started session cleanup loop")
+    yield
+    # Shutdown: stop cleanup
+    await session_manager.stop_cleanup_loop()
+    print("[Server] Stopped session cleanup loop")
+
+
+# --- App & session manager ---
+
+app = FastAPI(
+    title="BtSnoop Online Parser",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# CORS: allow all origins in dev mode
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global session manager (30 min inactivity timeout)
+session_manager = SessionManager(max_inactive_seconds=1800.0)
+
+# Max upload size: 100 MB
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024
+
+
+# --- REST Endpoints ---
+
+
+@app.post("/api/upload")
+async def upload_btsnoop(file: UploadFile = File(...)):
+    """
+    Upload a btsnoop file for parsing.
+
+    Reads the entire file, parses all packets, stores them in a session,
+    and returns the session_id plus basic stats.
+    """
+    # Validate content length if available
+    if file.size and file.size > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE // (1024*1024)}MB",
+        )
+
+    # Read file content
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum size is {MAX_UPLOAD_SIZE // (1024*1024)}MB",
+        )
+
+    if len(content) < 16:
+        raise HTTPException(status_code=400, detail="File too small to be a valid btsnoop file")
+
+    # Parse the btsnoop file
+    try:
+        reader = BtSnoopReader(io.BytesIO(content))
+    except (ValueError, Exception) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid btsnoop file: {str(e)}")
+
+    # Create session
+    session = session_manager.create_session()
+    state = session.session_state
+
+    # Parse all records
+    packet_index = 0
+    for record in reader:
+        # Decode packet
+        layers = parse_packet(record.data, record.flags, state)
+
+        # Determine top-level protocol and summary
+        protocol = "HCI"
+        summary_text = ""
+        if layers:
+            protocol = layers[-1].protocol  # deepest decoded layer
+            summary_text = layers[-1].summary
+
+        # Build PacketSummary
+        pkt_summary = PacketSummary(
+            index=packet_index,
+            timestamp_us=record.timestamp_us,
+            timestamp_str=record.timestamp_str,
+            direction=record.direction,
+            protocol=protocol,
+            summary=summary_text,
+            layers=layers,
+            raw_length=record.original_length,
+            included_length=record.included_length,
+        )
+
+        session.add_packet(record.data, record.flags, pkt_summary)
+        packet_index += 1
+
+    return JSONResponse(
+        content={
+            "session_id": session.session_id,
+            "total_packets": session.total_packets,
+            "datalink_type": reader.datalink_type,
+            "filename": file.filename or "unknown",
+        }
+    )
+
+
+@app.get("/api/sessions/{session_id}/packets")
+async def get_packets(
+    session_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
+    filter_expr: Optional[str] = Query(default=None, alias="filter"),
+):
+    """
+    Get paginated packet list for a session.
+
+    Query params:
+      - offset: Start index (default 0)
+      - limit: Max packets to return (default 100, max 1000)
+      - filter: Optional Wireshark-style filter expression
+    """
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    # Apply filter if provided
+    if filter_expr:
+        error = validate_filter(filter_expr)
+        if error:
+            raise HTTPException(status_code=400, detail=f"Invalid filter: {error}")
+        filter_func = compile_filter(filter_expr)
+
+        # Filter all packets, then paginate
+        filtered = []
+        for i, summary in enumerate(session.summaries):
+            raw = session.get_raw_packet(i)
+            if filter_func(summary, raw or b""):
+                filtered.append(summary)
+
+        total = len(filtered)
+        page = filtered[offset : offset + limit]
+    else:
+        total = session.total_packets
+        page = session.get_summaries(offset, limit)
+
+    return JSONResponse(
+        content={
+            "session_id": session_id,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "packets": [p.to_dict() for p in page],
+        }
+    )
+
+
+@app.get("/api/sessions/{session_id}/packets/{index}")
+async def get_packet_detail(session_id: str, index: int):
+    """
+    Get full decode detail for a single packet by index.
+    """
+    session = session_manager.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found or expired")
+
+    summary = session.get_summary(index)
+    if summary is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Packet index {index} not found (total: {session.total_packets})",
+        )
+
+    raw = session.get_raw_packet(index)
+    flags = session.get_flags(index)
+
+    return JSONResponse(
+        content={
+            "packet": summary.to_dict(),
+            "raw_hex": raw.hex() if raw else "",
+            "raw_length": len(raw) if raw else 0,
+            "flags": flags,
+        }
+    )
+
+
+# --- WebSocket Endpoint ---
+
+
+@app.websocket("/ws/{session_id}")
+async def websocket_endpoint(websocket: WebSocket, session_id: str):
+    """
+    WebSocket endpoint for streaming parsed packets to frontend.
+
+    Server -> Client messages:
+      - {"type": "packet_batch", "packets": [...]}  -- batch of PacketSummary dicts
+      - {"type": "packet_detail", "packet": {...}, "raw_hex": "...", "flags": N}
+      - {"type": "error", "message": "..."}
+      - {"type": "filter_applied", "expression": "...", "matched": N}
+
+    Client -> Server messages:
+      - {"action": "get_detail", "index": N}
+      - {"action": "set_filter", "expression": "..."}
+      - {"action": "get_packets", "offset": N, "limit": N}
+    """
+    session = session_manager.get_session(session_id)
+    if session is None:
+        await websocket.close(code=4004, reason="Session not found")
+        return
+
+    await websocket.accept()
+
+    # Send initial batch of packets
+    try:
+        await _send_packet_batches(websocket, session, filter_func=None)
+    except WebSocketDisconnect:
+        return
+
+    # Message loop
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                msg = json.loads(data)
+            except json.JSONDecodeError:
+                await websocket.send_json(
+                    {"type": "error", "message": "Invalid JSON message"}
+                )
+                continue
+
+            action = msg.get("action")
+            session.touch()
+
+            if action == "get_detail":
+                await _handle_get_detail(websocket, session, msg)
+            elif action == "set_filter":
+                await _handle_set_filter(websocket, session, msg)
+            elif action == "get_packets":
+                await _handle_get_packets(websocket, session, msg)
+            else:
+                await websocket.send_json(
+                    {"type": "error", "message": f"Unknown action: {action}"}
+                )
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json(
+                {"type": "error", "message": f"Internal error: {str(e)}"}
+            )
+        except Exception:
+            pass
+
+
+async def _send_packet_batches(
+    websocket: WebSocket,
+    session: Session,
+    filter_func=None,
+    offset: int = 0,
+    limit: Optional[int] = None,
+):
+    """
+    Send packets in batches via WebSocket.
+    Batches up to 100 packets or sends every 50ms, whichever comes first.
+    """
+    BATCH_SIZE = 100
+    BATCH_INTERVAL_MS = 50
+
+    packets_to_send = []
+    total = session.total_packets
+    end = total if limit is None else min(offset + limit, total)
+
+    for i in range(offset, end):
+        summary = session.summaries[i]
+        if filter_func is not None:
+            raw = session.get_raw_packet(i) or b""
+            if not filter_func(summary, raw):
+                continue
+        packets_to_send.append(summary)
+
+    # Send in batches
+    for batch_start in range(0, len(packets_to_send), BATCH_SIZE):
+        batch = packets_to_send[batch_start : batch_start + BATCH_SIZE]
+        await websocket.send_json(
+            {
+                "type": "packet_batch",
+                "packets": [p.to_dict() for p in batch],
+                "total": len(packets_to_send),
+                "batch_offset": batch_start,
+            }
+        )
+        # Yield control to allow other tasks / throttle
+        if batch_start + BATCH_SIZE < len(packets_to_send):
+            await asyncio.sleep(BATCH_INTERVAL_MS / 1000.0)
+
+
+async def _handle_get_detail(websocket: WebSocket, session: Session, msg: dict):
+    """Handle get_detail request: send full packet decode."""
+    index = msg.get("index")
+    if index is None or not isinstance(index, int):
+        await websocket.send_json(
+            {"type": "error", "message": "get_detail requires integer 'index'"}
+        )
+        return
+
+    summary = session.get_summary(index)
+    if summary is None:
+        await websocket.send_json(
+            {"type": "error", "message": f"Packet index {index} not found"}
+        )
+        return
+
+    raw = session.get_raw_packet(index)
+    flags = session.get_flags(index)
+
+    await websocket.send_json(
+        {
+            "type": "packet_detail",
+            "packet": summary.to_dict(),
+            "raw_hex": raw.hex() if raw else "",
+            "flags": flags,
+        }
+    )
+
+
+async def _handle_set_filter(websocket: WebSocket, session: Session, msg: dict):
+    """Handle set_filter request: re-stream filtered packets."""
+    expression = msg.get("expression", "")
+
+    if expression:
+        error = validate_filter(expression)
+        if error:
+            await websocket.send_json(
+                {"type": "error", "message": f"Invalid filter: {error}"}
+            )
+            return
+        filter_func = compile_filter(expression)
+    else:
+        filter_func = None
+
+    # Count matches and stream filtered results
+    matched = 0
+    if filter_func:
+        for i in range(session.total_packets):
+            raw = session.get_raw_packet(i) or b""
+            if filter_func(session.summaries[i], raw):
+                matched += 1
+    else:
+        matched = session.total_packets
+
+    await websocket.send_json(
+        {
+            "type": "filter_applied",
+            "expression": expression,
+            "matched": matched,
+            "total": session.total_packets,
+        }
+    )
+
+    # Stream filtered packets
+    await _send_packet_batches(websocket, session, filter_func=filter_func)
+
+
+async def _handle_get_packets(websocket: WebSocket, session: Session, msg: dict):
+    """Handle get_packets request with optional pagination."""
+    offset = msg.get("offset", 0)
+    limit = msg.get("limit", 100)
+    expression = msg.get("filter", "")
+
+    filter_func = None
+    if expression:
+        error = validate_filter(expression)
+        if error:
+            await websocket.send_json(
+                {"type": "error", "message": f"Invalid filter: {error}"}
+            )
+            return
+        filter_func = compile_filter(expression)
+
+    await _send_packet_batches(
+        websocket, session, filter_func=filter_func, offset=offset, limit=limit
+    )
+
+
+# --- Health check ---
+
+
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint."""
+    return {
+        "status": "ok",
+        "active_sessions": session_manager.active_sessions,
+    }
+
+
+# --- Main entry point ---
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "server:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info",
+    )

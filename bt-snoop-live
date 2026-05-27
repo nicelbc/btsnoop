@@ -1,0 +1,964 @@
+#!/usr/bin/env python3
+"""
+bt-snoop-live: 实时读取手机 btsnoop_hci.log，Wireshark 风格解析显示
+用法:
+    bt-snoop-live                        # 实时抓取
+    bt-snoop-live -f file.cfa            # 从 btsnoop 文件解析
+    bt-snoop-live -s SERIAL              # 指定设备
+    bt-snoop-live --filter hci           # 只看 HCI 层
+    bt-snoop-live --filter avdtp         # 只看 AVDTP
+    bt-snoop-live --filter a2dp          # 只看 A2DP (AVDTP 语义解析)
+    bt-snoop-live --filter l2cap         # 只看 L2CAP
+    bt-snoop-live --filter acl           # 所有 ACL 数据
+"""
+# [AI-GEN] 蓝牙 btsnoop 实时解析工具（Wireshark 终端版）
+
+import struct
+import sys
+import time
+import argparse
+import subprocess
+import datetime
+import os
+import tempfile
+
+# ── 颜色 ──
+class C:
+    RST   = '\033[0m'
+    BOLD  = '\033[1m'
+    DIM   = '\033[2m'
+    RED   = '\033[91m'
+    GRN   = '\033[92m'
+    YEL   = '\033[93m'
+    BLU   = '\033[94m'
+    MAG   = '\033[95m'
+    CYN   = '\033[96m'
+    WHT   = '\033[97m'
+    GRAY  = '\033[90m'
+    BG_RED = '\033[41m'
+    BG_GRN = '\033[42m'
+
+# ── HCI 常量 ──
+HCI_TYPES = {0x01: 'HCI_CMD', 0x02: 'ACL', 0x03: 'SCO', 0x04: 'HCI_EVT', 0x05: 'ISO'}
+
+# HCI Command Opcodes (BT Core Spec + common vendor)
+HCI_CMDS = {
+    # Link Control
+    0x0401: 'Inquiry', 0x0402: 'Inquiry_Cancel',
+    0x0403: 'Periodic_Inquiry', 0x0404: 'Exit_Periodic_Inquiry',
+    0x0405: 'Create_Connection', 0x0406: 'Disconnect',
+    0x0407: 'Add_SCO_Connection', 0x0408: 'Accept_Connection',
+    0x0409: 'Reject_Connection', 0x040b: 'Link_Key_Reply',
+    0x040c: 'Link_Key_Neg_Reply', 0x040d: 'PIN_Code_Reply',
+    0x0411: 'Authentication_Requested', 0x0413: 'Change_Conn_Pkt_Type',
+    0x0419: 'Remote_Name_Cancel', 0x041a: 'Remote_Name_Request',
+    0x041b: 'Read_Remote_Features', 0x041c: 'Read_Remote_Ext_Features',
+    0x041d: 'Read_Remote_Version', 0x0428: 'Setup_Sync_Conn',
+    0x0429: 'Accept_Sync_Conn', 0x042b: 'IO_Capability_Reply',
+    0x042c: 'User_Confirm_Reply', 0x042d: 'User_Confirm_Neg_Reply',
+    0x0434: 'IO_Capability_Neg_Reply',
+    # Link Policy
+    0x0801: 'Hold_Mode', 0x0803: 'Sniff_Mode', 0x0804: 'Exit_Sniff',
+    0x080d: 'Write_Link_Policy', 0x080f: 'Write_Default_Link_Policy',
+    0x0811: 'Sniff_Subrating',
+    # Controller & Baseband
+    0x0c01: 'Set_Event_Mask', 0x0c03: 'Reset', 0x0c05: 'Set_Event_Filter',
+    0x0c08: 'Flush', 0x0c13: 'Change_Local_Name', 0x0c14: 'Read_Local_Name',
+    0x0c1a: 'Write_Scan_Enable', 0x0c1c: 'Write_Page_Scan_Activity',
+    0x0c1e: 'Write_Inquiry_Scan_Activity',
+    0x0c20: 'Write_Authentication_Enable',
+    0x0c24: 'Write_Class_of_Device', 0x0c25: 'Read_Voice_Setting',
+    0x0c26: 'Write_Voice_Setting', 0x0c28: 'Write_Auto_Flush_Timeout',
+    0x0c2d: 'Read_Transmit_Power', 0x0c33: 'Host_Buffer_Size',
+    0x0c35: 'Read_Link_Supervision_TO', 0x0c37: 'Write_Link_Supervision_TO',
+    0x0c39: 'Read_Num_Broadcast_Retrans',
+    0x0c45: 'Write_Inquiry_Mode', 0x0c47: 'Read_Page_Scan_Type',
+    0x0c52: 'Write_EIR', 0x0c55: 'Read_Simple_Pairing',
+    0x0c56: 'Write_Simple_Pairing', 0x0c58: 'Read_Inquiry_Rsp_TX',
+    0x0c5b: 'Read_Default_Erroneous',
+    0x0c60: 'Read_LE_Host_Support', 0x0c6d: 'Write_LE_Host_Support',
+    0x0c63: 'Set_Event_Mask_Page2', 0x0c7a: 'Write_Secure_Conn_Support',
+    0x0c84: 'Set_Min_Encryption_Key_Size',
+    # Informational
+    0x1001: 'Read_Local_Version', 0x1002: 'Read_Local_Commands',
+    0x1003: 'Read_Local_Features', 0x1004: 'Read_Local_Ext_Features',
+    0x1005: 'Read_Buffer_Size', 0x1009: 'Read_BD_Addr',
+    0x100b: 'Read_Data_Block_Size',
+    # Status
+    0x1403: 'Read_RSSI',
+    # LE Controller
+    0x2001: 'LE_Set_Event_Mask', 0x2002: 'LE_Read_Buffer_Size',
+    0x2003: 'LE_Read_Local_Features', 0x2005: 'LE_Set_Random_Addr',
+    0x2006: 'LE_Set_Adv_Params', 0x2008: 'LE_Set_Adv_Data',
+    0x200a: 'LE_Set_Adv_Enable', 0x200c: 'LE_Set_Scan_Params',
+    0x200d: 'LE_Set_Scan_Enable', 0x200e: 'LE_Create_Connection',
+    0x200f: 'LE_Read_White_List_Size', 0x201c: 'LE_Read_Supported_States',
+    0x2023: 'LE_Read_Max_Data_Length', 0x202a: 'LE_Read_Num_Adv_Sets',
+    0x202f: 'LE_Read_TX_Power', 0x203a: 'LE_Read_RF_Path_Compensation',
+    0x203b: 'LE_Write_RF_Path_Compensation',
+    0x204a: 'LE_Read_Buffer_Size_V2', 0x2060: 'LE_Set_Host_Feature',
+    # Vendor Specific (MTK / Xiaomi common)
+    0xfc17: 'VS_MTK_Init', 0xfd5d: 'VS_A2DP_Opcode',
+    0xfd95: 'VS_Codec_State', 0xfd53: 'VS_MTK_Config',
+}
+
+HCI_EVTS = {
+    0x01: 'Inquiry_Complete', 0x02: 'Inquiry_Result',
+    0x03: 'Conn_Complete', 0x04: 'Conn_Request',
+    0x05: 'Disconn_Complete', 0x06: 'Auth_Complete',
+    0x07: 'Remote_Name_Complete', 0x08: 'Encrypt_Change',
+    0x09: 'Change_Conn_Link_Key_Complete',
+    0x0b: 'Read_Remote_Features_Complete',
+    0x0c: 'Read_Remote_Version_Complete',
+    0x0e: 'Cmd_Complete', 0x0f: 'Cmd_Status',
+    0x10: 'Hardware_Error', 0x12: 'Role_Change',
+    0x13: 'Num_Completed_Pkts', 0x14: 'Mode_Change',
+    0x17: 'Link_Key_Notification', 0x18: 'Loopback_Command',
+    0x1b: 'Max_Slots_Change', 0x1c: 'Read_Clock_Offset_Complete',
+    0x1d: 'Conn_Pkt_Type_Changed',
+    0x20: 'Page_Scan_Repetition_Mode_Change',
+    0x22: 'Inquiry_Result_With_RSSI',
+    0x2f: 'Extended_Inquiry_Result',
+    0x30: 'Encryption_Key_Refresh',
+    0x31: 'IO_Capability_Request', 0x32: 'IO_Capability_Response',
+    0x33: 'User_Confirm_Request', 0x34: 'User_Passkey_Request',
+    0x35: 'Remote_OOB_Data_Request',
+    0x36: 'Simple_Pairing_Complete',
+    0x38: 'Link_Supervision_TO_Changed',
+    0x3e: 'LE_Meta', 0xff: 'Vendor_Specific',
+}
+
+# L2CAP CID
+L2CAP_CIDS = {
+    0x0001: 'L2CAP_SIG', 0x0002: 'Connectionless', 0x0003: 'AMP_Manager',
+    0x0004: 'ATT', 0x0005: 'LE_L2CAP_SIG', 0x0006: 'SMP',
+}
+
+# L2CAP PSM
+L2CAP_PSMS = {
+    0x0001: 'SDP', 0x0003: 'RFCOMM', 0x000f: 'BNEP',
+    0x0011: 'HID_Control', 0x0013: 'HID_Interrupt',
+    0x0017: 'AVCTP', 0x0019: 'AVDTP', 0x001b: 'AVCTP_Browsing',
+}
+
+# L2CAP Signaling codes
+L2CAP_SIG_CODES = {
+    0x01: 'CMD_REJECT', 0x02: 'CONN_REQ', 0x03: 'CONN_RSP',
+    0x04: 'CONFIG_REQ', 0x05: 'CONFIG_RSP',
+    0x06: 'DISCONN_REQ', 0x07: 'DISCONN_RSP',
+    0x08: 'ECHO_REQ', 0x09: 'ECHO_RSP',
+    0x0a: 'INFO_REQ', 0x0b: 'INFO_RSP',
+}
+
+# AVDTP Signal IDs
+AVDTP_SIGS = {
+    0x01: 'DISCOVER', 0x02: 'GET_CAPABILITIES', 0x03: 'SET_CONFIGURATION',
+    0x04: 'GET_CONFIGURATION', 0x05: 'RECONFIGURE', 0x06: 'OPEN',
+    0x07: 'START', 0x08: 'CLOSE', 0x09: 'SUSPEND', 0x0a: 'ABORT',
+    0x0b: 'SECURITY_CONTROL', 0x0c: 'GET_ALL_CAPABILITIES',
+    0x0d: 'DELAY_REPORT',
+}
+
+AVDTP_MSG_TYPES = {0: 'CMD', 1: 'GEN_REJECT', 2: 'RSP_ACCEPT', 3: 'RSP_REJECT'}
+
+# ── L2CAP CID → PSM 映射（运行时动态建立） ──
+cid_to_psm = {}
+
+# ── btsnoop 时间戳 ──
+def ts_to_str(ts_us):
+    try:
+        dt = datetime.datetime(2000, 1, 1) + datetime.timedelta(microseconds=ts_us - 0x00dcddb30f2f8000)
+        return dt.strftime('%H:%M:%S.%f')[:-3]
+    except:
+        return '??:??:??.???'
+
+# ── 解析函数 ──
+def parse_hci_cmd(data):
+    if len(data) < 4:
+        return 'HCI_CMD', '(truncated)'
+    opcode = struct.unpack('<H', data[1:3])[0]
+    plen = data[3]
+    ogf = (opcode >> 10) & 0x3F
+    ocf = opcode & 0x03FF
+    name = HCI_CMDS.get(opcode, "0x{:04x}".format(opcode))
+    return 'HCI_CMD', "{} (0x{:04x}) plen={}".format(name, opcode, plen)
+
+def parse_hci_evt(data):
+    if len(data) < 3:
+        return 'HCI_EVT', '(truncated)'
+    evt_code = data[1]
+    plen = data[2]
+    evt_name = HCI_EVTS.get(evt_code, "0x{:02x}".format(evt_code))
+
+    if evt_code == 0x0e and len(data) >= 7:  # Command Complete
+        num_pkts = data[3]
+        cc_op = struct.unpack('<H', data[4:6])[0]
+        cc_name = HCI_CMDS.get(cc_op, "0x{:04x}".format(cc_op))
+        status = data[6] if len(data) > 6 else -1
+        st_str = " status={}".format(status) if status > 0 else ""
+        return 'HCI_EVT', "Cmd_Complete: {}{}".format(cc_name, st_str)
+    elif evt_code == 0x0f and len(data) >= 7:  # Command Status
+        status = data[3]
+        cs_op = struct.unpack('<H', data[5:7])[0]
+        cs_name = HCI_CMDS.get(cs_op, "0x{:04x}".format(cs_op))
+        return 'HCI_EVT', "Cmd_Status: {} status={}".format(cs_name, status)
+    elif evt_code == 0x03 and len(data) >= 14:  # Connection Complete
+        status = data[3]
+        handle = struct.unpack('<H', data[4:6])[0]
+        addr = ':'.join("{:02x}".format(b) for b in reversed(data[6:12]))
+        return 'HCI_EVT', "Conn_Complete handle=0x{:04x} addr={} st={}".format(handle, addr, status)
+    elif evt_code == 0x05 and len(data) >= 7:  # Disconnection Complete
+        status = data[3]
+        handle = struct.unpack('<H', data[4:6])[0]
+        reason = data[6]
+        return 'HCI_EVT', "Disconn_Complete handle=0x{:04x} reason=0x{:02x}".format(handle, reason)
+    elif evt_code == 0x14 and len(data) >= 7:  # Mode Change
+        status = data[3]
+        handle = struct.unpack('<H', data[4:6])[0]
+        mode = data[6]
+        modes = {0: 'Active', 1: 'Hold', 2: 'Sniff', 3: 'Park'}
+        return 'HCI_EVT', "Mode_Change: {} handle=0x{:04x}".format(modes.get(mode, str(mode)), handle)
+    elif evt_code == 0x13 and len(data) >= 5:  # Num Completed Packets
+        num = data[3]
+        return 'HCI_EVT', "Num_Completed_Pkts n={}".format(num)
+    elif evt_code == 0x3e and len(data) >= 4:  # LE Meta
+        sub = data[3]
+        le_names = {0x01: 'LE_Conn_Complete', 0x02: 'LE_Adv_Report',
+                    0x04: 'LE_Read_Remote_Features_Complete',
+                    0x07: 'LE_Data_Length_Change', 0x0a: 'LE_Enhanced_Conn_Complete',
+                    0x0d: 'LE_Extended_Adv_Report'}
+        sub_name = le_names.get(sub, "sub=0x{:02x}".format(sub))
+        return 'HCI_EVT', "LE_Meta: {}".format(sub_name)
+    else:
+        return 'HCI_EVT', "{} plen={}".format(evt_name, plen)
+
+def parse_l2cap_signaling(payload, direction):
+    """解析 L2CAP 信令"""
+    if len(payload) < 4:
+        return 'L2CAP_SIG', '(truncated)'
+    code = payload[0]
+    ident = payload[1]
+    sig_len = struct.unpack('<H', payload[2:4])[0]
+    code_name = L2CAP_SIG_CODES.get(code, "code=0x{:02x}".format(code))
+    info = "{} id={}".format(code_name, ident)
+
+    if code == 0x02 and len(payload) >= 8:  # Connection Request
+        psm = struct.unpack('<H', payload[4:6])[0]
+        scid = struct.unpack('<H', payload[6:8])[0]
+        psm_name = L2CAP_PSMS.get(psm, "0x{:04x}".format(psm))
+        info = "CONN_REQ PSM={} SCID=0x{:04x}".format(psm_name, scid)
+        cid_to_psm[scid] = psm
+    elif code == 0x03 and len(payload) >= 12:  # Connection Response
+        dcid = struct.unpack('<H', payload[4:6])[0]
+        scid = struct.unpack('<H', payload[6:8])[0]
+        result = struct.unpack('<H', payload[8:10])[0]
+        results = {0: 'Success', 1: 'Pending', 2: 'PSM_Not_Supported', 3: 'Security_Block', 4: 'No_Resources'}
+        info = "CONN_RSP DCID=0x{:04x} SCID=0x{:04x} {}".format(dcid, scid, results.get(result, str(result)))
+        if scid in cid_to_psm:
+            cid_to_psm[dcid] = cid_to_psm[scid]
+    elif code == 0x04 and len(payload) >= 8:  # Config Request
+        dcid = struct.unpack('<H', payload[4:6])[0]
+        info = "CONFIG_REQ DCID=0x{:04x}".format(dcid)
+    elif code == 0x05 and len(payload) >= 10:  # Config Response
+        scid = struct.unpack('<H', payload[4:6])[0]
+        result = struct.unpack('<H', payload[8:10])[0]
+        info = "CONFIG_RSP SCID=0x{:04x} result={}".format(scid, result)
+    elif code == 0x06 and len(payload) >= 8:  # Disconnection Request
+        dcid = struct.unpack('<H', payload[4:6])[0]
+        scid = struct.unpack('<H', payload[6:8])[0]
+        info = "DISCONN_REQ DCID=0x{:04x} SCID=0x{:04x}".format(dcid, scid)
+    elif code == 0x07 and len(payload) >= 8:  # Disconnection Response
+        dcid = struct.unpack('<H', payload[4:6])[0]
+        scid = struct.unpack('<H', payload[6:8])[0]
+        info = "DISCONN_RSP DCID=0x{:04x} SCID=0x{:04x}".format(dcid, scid)
+
+    return 'L2CAP_SIG', info
+
+
+# [AI-GEN] AVDTP Service Category IDs
+AVDTP_CATEGORIES = {
+    0x01: 'MEDIA_TRANSPORT', 0x02: 'REPORTING', 0x03: 'RECOVERY',
+    0x04: 'CONTENT_PROTECTION', 0x05: 'HEADER_COMPRESSION',
+    0x06: 'MULTIPLEXING', 0x07: 'MEDIA_CODEC', 0x08: 'DELAY_REPORTING',
+}
+
+# [AI-GEN] A2DP Codec Types
+A2DP_CODECS = {
+    0x00: 'SBC', 0x01: 'MPEG-1,2', 0x02: 'AAC', 0x04: 'ATRAC',
+    0xFF: 'Vendor',
+}
+
+# [AI-GEN] Known Vendor Codec IDs (vendor_id is 32-bit, codec_id is 16-bit)
+VENDOR_CODECS = {
+    (0x0000004F, 0x0001): 'aptX',
+    (0x000000D7, 0x0024): 'aptX-HD',
+    (0x0000012D, 0x00AA): 'LDAC',
+    (0x0000053A, 0x4C32): 'LHDC2.0',
+    (0x0000053A, 0x4C33): 'LHDC3.0/4.0',
+    (0x0000053A, 0x4C35): 'LHDC-V',
+    (0x0000053A, 0x4C48): 'LHDC',
+    (0x0000000A, 0x0001): 'Samsung-SSC',
+    (0x00000075, 0x0102): 'aptX-Adaptive',
+    (0x00000075, 0x0103): 'aptX-Lossless',
+}
+
+# [AI-GEN] LHDC 2.0/3.0/4.0 Max Bitrate (2 bits)
+LHDC_MAX_BITRATE = {0b00: '900kbps', 0b01: '500kbps', 0b10: '400kbps', 0b11: 'Reserved'}
+# LHDC 2.0/3.0/4.0 Min Bitrate (V4 only)
+LHDC_MIN_BITRATE_V4 = {0b1: '320kbps', 0b0: 'default'}
+# LHDC-V Max Bitrate
+LHDCV_MAX_BITRATE = {0b00: 'NoLimit', 0b01: '400kbps', 0b10: '600kbps', 0b11: '900kbps'}
+# LHDC-V Min Bitrate
+LHDCV_MIN_BITRATE = {0b00: 'NoLimit', 0b01: '128kbps', 0b10: '256kbps', 0b11: '400kbps'}
+# LHDC-V Version
+LHDCV_VERSION = {0b0001: 'V5.0', 0b0010: 'V5.1', 0b0100: 'V5.2', 0b1000: 'V5.3'}
+
+# [AI-GEN] SBC 采样率/声道/比特池解析
+SBC_SAMPLE_FREQS = {0x80: '16000', 0x40: '32000', 0x20: '44100', 0x10: '48000'}
+SBC_CHANNELS = {0x08: 'Mono', 0x04: 'DualCh', 0x02: 'Stereo', 0x01: 'Joint'}
+SBC_BLOCKS = {0x80: '4', 0x40: '8', 0x20: '12', 0x10: '16'}
+SBC_SUBBANDS = {0x08: '4', 0x04: '8'}
+SBC_ALLOC = {0x02: 'SNR', 0x01: 'Loudness'}
+
+# [AI-GEN] AAC Object Types & Sample Rates
+AAC_OBJ_TYPES = {0x80: 'MPEG2-LC', 0x40: 'MPEG4-LC', 0x20: 'MPEG4-LTP', 0x10: 'MPEG4-Scalable'}
+AAC_SAMPLE_FREQS = {
+    0x8000: '8000', 0x4000: '11025', 0x2000: '12000', 0x1000: '16000',
+    0x0800: '22050', 0x0400: '24000', 0x0200: '32000', 0x0100: '44100',
+    0x0080: '48000', 0x0040: '64000', 0x0020: '88200', 0x0010: '96000',
+}
+
+def parse_sbc_config(data):
+    """解析 SBC codec specific info"""
+    if len(data) < 4:
+        return ''
+    parts = []
+    freq_byte = data[0] & 0xF0
+    for mask, val in SBC_SAMPLE_FREQS.items():
+        if freq_byte & mask:
+            parts.append(val + 'Hz')
+            break
+    ch_byte = data[0] & 0x0F
+    for mask, val in SBC_CHANNELS.items():
+        if ch_byte & mask:
+            parts.append(val)
+            break
+    parts.append('bitpool={}-{}'.format(data[2], data[3]))
+    return ' '.join(parts)
+
+def parse_aac_config(data):
+    """解析 AAC codec specific info"""
+    if len(data) < 6:
+        return ''
+    parts = []
+    for mask, val in AAC_OBJ_TYPES.items():
+        if data[0] & mask:
+            parts.append(val)
+            break
+    freq_bits = (data[1] << 4) | ((data[2] >> 4) & 0x0F)
+    for mask, val in AAC_SAMPLE_FREQS.items():
+        if freq_bits & mask:
+            parts.append(val + 'Hz')
+            break
+    ch = (data[2] >> 2) & 0x03
+    if ch == 0x02:
+        parts.append('Stereo')
+    elif ch == 0x01:
+        parts.append('Mono')
+    vbr = (data[3] >> 7) & 0x01
+    bitrate = ((data[3] & 0x7F) << 16) | (data[4] << 8) | data[5]
+    if vbr:
+        parts.append('VBR')
+    if bitrate > 0:
+        parts.append('{}kbps'.format(bitrate // 1000))
+    return ' '.join(parts)
+
+def parse_lhdc_v234_config(codec_id, data):
+    """解析 LHDC 2.0/3.0/4.0 codec specific info"""
+    parts = []
+    if codec_id == 0x4C32:
+        parts.append('LHDC2.0')
+    else:
+        parts.append('LHDC3.0/4.0')
+
+    if len(data) < 2:
+        return ' '.join(parts)
+
+    # Octet 6 (data[0]): LHDC-AR|JAS|16bit|24bit|44.1K|48K|Rsvd|96K
+    b6 = data[0]
+    freqs = []
+    if b6 & 0x08: freqs.append('44.1K')
+    if b6 & 0x04: freqs.append('48K')
+    if b6 & 0x01: freqs.append('96K')
+    bits = []
+    if b6 & 0x20: bits.append('16bit')
+    if b6 & 0x10: bits.append('24bit')
+    features = []
+    if b6 & 0x80: features.append('AR')
+    if b6 & 0x40: features.append('JAS')
+
+    if freqs: parts.append('/'.join(freqs))
+    if bits: parts.append('/'.join(bits))
+
+    # Octet 7 (data[1]): LLAC|LHDC-LL|MaxBitrate(2)|VersionNumber(4)
+    b7 = data[1]
+    if b7 & 0x80: features.append('LLAC')
+    if b7 & 0x40: features.append('LL')
+    max_br = (b7 >> 4) & 0x03
+    parts.append('max={}'.format(LHDC_MAX_BITRATE.get(max_br, '?')))
+    version = b7 & 0x0F
+    if version == 1:
+        parts.append('ver=2.0')
+    elif version == 0x01:
+        parts.append('ver=2.0/3.0')
+
+    # Octet 8 (data[2], 4.0 Only): LHDC4.0|LARC|MinBitrate(2)|3rdParty|CompressorFmt(3)
+    if len(data) >= 3:
+        b8 = data[2]
+        if b8 & 0x80: features.append('V4.0')
+        if b8 & 0x40: features.append('LARC')
+        min_br = (b8 >> 4) & 0x03
+        if min_br: parts.append('min=320kbps')
+        if b8 & 0x08: features.append('3rdParty')
+        comp_fmt = b8 & 0x07
+        if comp_fmt == 1: features.append('SplitTWS')
+        elif comp_fmt == 2: features.append('SplitPreLR')
+
+    if features: parts.append('[{}]'.format(','.join(features)))
+    return ' '.join(parts)
+
+def parse_lhdc_v_config(data):
+    """解析 LHDC-V codec specific info"""
+    parts = ['LHDC-V']
+
+    if len(data) < 3:
+        if data: parts.append('[{}]'.format(data.hex()))
+        return ' '.join(parts)
+
+    # Octet 6 (data[0]): Rsvd|Rsvd|44.1K|48K|Rsvd|96K|Rsvd|192K
+    b6 = data[0]
+    freqs = []
+    if b6 & 0x20: freqs.append('44.1K')
+    if b6 & 0x10: freqs.append('48K')
+    if b6 & 0x04: freqs.append('96K')
+    if b6 & 0x01: freqs.append('192K')
+    if freqs: parts.append('/'.join(freqs))
+
+    # Octet 7 (data[1]): MinBitrate(2)|MaxBitrate(2)|Rsvd|16bit|24bit|32bit
+    b7 = data[1]
+    min_br = (b7 >> 6) & 0x03
+    max_br = (b7 >> 4) & 0x03
+    parts.append('max={}'.format(LHDCV_MAX_BITRATE.get(max_br, '?')))
+    parts.append('min={}'.format(LHDCV_MIN_BITRATE.get(min_br, '?')))
+    bits = []
+    if b7 & 0x04: bits.append('16bit')
+    if b7 & 0x02: bits.append('24bit')
+    if b7 & 0x01: bits.append('32bit')
+    if bits: parts.append('/'.join(bits))
+
+    # Octet 8 (data[2]): Rsvd|Rsvd|Rsvd|5ms|VersionNumber(4)
+    b8 = data[2]
+    frame_5ms = (b8 >> 4) & 0x01
+    if frame_5ms: parts.append('5ms')
+    version = b8 & 0x0F
+    ver_name = LHDCV_VERSION.get(version, 'v?({})'.format(version))
+    parts.append(ver_name)
+
+    # Octet 9 (data[3]): Lossless|LL|Rsvd|Rsvd|Rsvd|Meta|JAS|AR
+    features = []
+    if len(data) >= 4:
+        b9 = data[3]
+        if b9 & 0x80: features.append('Lossless')
+        if b9 & 0x40: features.append('LL')
+        if b9 & 0x04: features.append('Meta')
+        if b9 & 0x02: features.append('JAS')
+        if b9 & 0x01: features.append('AR')
+
+    if features: parts.append('[{}]'.format(','.join(features)))
+    return ' '.join(parts)
+
+def parse_vendor_config(data):
+    """解析 Vendor codec specific info (vendor_id=4bytes, codec_id=2bytes)"""
+    if len(data) < 6:
+        return ''
+    vendor_id = struct.unpack('<I', data[0:4])[0]
+    codec_id = struct.unpack('<H', data[4:6])[0]
+    codec_specific = data[6:]
+
+    # LHDC family (Savitech, vendor_id=0x053A)
+    if vendor_id == 0x0000053A:
+        if codec_id in (0x4C32, 0x4C33):
+            return parse_lhdc_v234_config(codec_id, codec_specific)
+        elif codec_id == 0x4C35:
+            return parse_lhdc_v_config(codec_specific)
+
+    name = VENDOR_CODECS.get((vendor_id, codec_id),
+                             'Vendor(0x{:08X}:0x{:04X})'.format(vendor_id, codec_id))
+    if codec_specific:
+        return '{} [{}]'.format(name, codec_specific.hex())
+    return name
+
+def parse_codec_capability(media_type, codec_type, codec_data):
+    """解析 media codec capability/configuration"""
+    codec_name = A2DP_CODECS.get(codec_type, '0x{:02X}'.format(codec_type))
+    if codec_type == 0x00:  # SBC
+        detail = parse_sbc_config(codec_data)
+        return 'SBC {}'.format(detail)
+    elif codec_type == 0x02:  # AAC
+        detail = parse_aac_config(codec_data)
+        return 'AAC {}'.format(detail)
+    elif codec_type == 0xFF:  # Vendor
+        detail = parse_vendor_config(codec_data)
+        return detail
+    else:
+        return '{} [{}]'.format(codec_name, codec_data.hex() if codec_data else '')
+
+def parse_capabilities(payload_data):
+    """解析 AVDTP capabilities 列表，提取 codec 信息"""
+    caps = []
+    i = 0
+    while i + 1 < len(payload_data):
+        cat_id = payload_data[i]
+        cat_len = payload_data[i + 1]
+        cat_name = AVDTP_CATEGORIES.get(cat_id, '0x{:02X}'.format(cat_id))
+        cat_data = payload_data[i+2:i+2+cat_len]
+
+        if cat_id == 0x07 and cat_len >= 2:  # MEDIA_CODEC
+            media_type = (cat_data[0] >> 4) & 0x0F
+            codec_type = cat_data[1]
+            codec_data = cat_data[2:]
+            codec_info = parse_codec_capability(media_type, codec_type, codec_data)
+            caps.append('Codec={}'.format(codec_info))
+        elif cat_id == 0x04 and cat_len >= 2:  # CONTENT_PROTECTION
+            cp_type = struct.unpack('<H', cat_data[0:2])[0]
+            cp_names = {0x01: 'DTCP', 0x02: 'SCMS-T'}
+            caps.append('CP={}'.format(cp_names.get(cp_type, '0x{:04X}'.format(cp_type))))
+        elif cat_id == 0x08:  # DELAY_REPORTING
+            caps.append('DelayReport')
+        i += 2 + cat_len
+    return caps
+
+def parse_avdtp(payload):
+    """解析 AVDTP 信令"""
+    if len(payload) < 2:
+        return 'AVDTP', '(truncated)'
+    # AVDTP header: transaction_label(4) + packet_type(2) + msg_type(2) + signal_id(6)
+    hdr0 = payload[0]
+    trans_label = (hdr0 >> 4) & 0x0F
+    pkt_type = (hdr0 >> 2) & 0x03
+    msg_type = hdr0 & 0x03
+
+    if pkt_type == 0:  # Single packet
+        if len(payload) < 2:
+            return 'AVDTP', '(truncated)'
+        sig_id = payload[1] & 0x3F
+    else:
+        sig_id = 0
+
+    sig_name = AVDTP_SIGS.get(sig_id, "SIG_0x{:02x}".format(sig_id))
+    msg_name = AVDTP_MSG_TYPES.get(msg_type, str(msg_type))
+
+    info = "{} {} label={}".format(sig_name, msg_name, trans_label)
+
+    # 追加 SEID 信息
+    if sig_id in (0x06, 0x07, 0x08, 0x09, 0x0a) and msg_type == 0 and len(payload) >= 3:
+        seid = (payload[2] >> 2) & 0x3F
+        info += " SEID={}".format(seid)
+
+    # [AI-GEN] 解析 capabilities 详细参数
+    cap_data = None
+    if sig_id == 0x03 and msg_type == 0 and len(payload) > 4:
+        # SET_CONFIGURATION CMD: ACP_SEID(1) + INT_SEID(1) + capabilities
+        acp_seid = (payload[2] >> 2) & 0x3F
+        int_seid = (payload[3] >> 2) & 0x3F
+        info += " ACP={} INT={}".format(acp_seid, int_seid)
+        cap_data = payload[4:]
+    elif sig_id == 0x05 and msg_type == 0 and len(payload) > 3:
+        # RECONFIGURE CMD: ACP_SEID(1) + capabilities
+        acp_seid = (payload[2] >> 2) & 0x3F
+        info += " SEID={}".format(acp_seid)
+        cap_data = payload[3:]
+    elif sig_id in (0x02, 0x0c) and msg_type == 2 and len(payload) > 2:
+        # GET_CAPABILITIES / GET_ALL_CAPABILITIES RSP_ACCEPT: capabilities
+        cap_data = payload[2:]
+    elif sig_id == 0x01 and msg_type == 2 and len(payload) > 2:
+        # DISCOVER RSP_ACCEPT: SEID info elements
+        seids = []
+        i = 2
+        while i + 1 < len(payload):
+            seid = (payload[i] >> 2) & 0x3F
+            in_use = (payload[i] >> 1) & 0x01
+            media_type = (payload[i+1] >> 4) & 0x0F
+            tsep = (payload[i+1] >> 3) & 0x01
+            media_names = {0: 'Audio', 1: 'Video', 2: 'Multimedia'}
+            tsep_names = {0: 'SRC', 1: 'SNK'}
+            seids.append('{}({}/{}{})'.format(
+                seid, media_names.get(media_type, '?'),
+                tsep_names.get(tsep, '?'),
+                ',InUse' if in_use else ''))
+            i += 2
+        if seids:
+            info += ' [{}]'.format(' '.join(seids))
+    elif sig_id == 0x0d and msg_type == 0 and len(payload) >= 5:
+        # DELAY_REPORT CMD: SEID + delay(2 bytes, 1/10 ms)
+        seid = (payload[2] >> 2) & 0x3F
+        delay = struct.unpack('>H', payload[3:5])[0]
+        info += " SEID={} delay={:.1f}ms".format(seid, delay / 10.0)
+
+    if cap_data:
+        caps = parse_capabilities(cap_data)
+        if caps:
+            info += ' [{}]'.format(', '.join(caps))
+
+    return 'AVDTP', info
+
+def parse_acl(data):
+    """解析 ACL 数据包"""
+    if len(data) < 5:
+        return 'ACL', '(truncated)', None
+    hf = struct.unpack('<H', data[1:3])[0]
+    handle = hf & 0x0FFF
+    pb_flag = (hf >> 12) & 0x03
+    bc_flag = (hf >> 14) & 0x03
+    acl_len = struct.unpack('<H', data[3:5])[0]
+
+    if len(data) < 9:
+        return 'ACL', "handle=0x{:04x} len={}".format(handle, acl_len), None
+
+    l2cap_len, l2cap_cid = struct.unpack('<HH', data[5:9])
+    l2cap_payload = data[9:9+l2cap_len] if len(data) >= 9+l2cap_len else data[9:]
+
+    # L2CAP Signaling Channel
+    if l2cap_cid == 0x0001:
+        proto, info = parse_l2cap_signaling(l2cap_payload, None)
+        return proto, "handle=0x{:04x} {}".format(handle, info), 'l2cap'
+
+    # 已知 CID 名
+    cid_name = L2CAP_CIDS.get(l2cap_cid, None)
+
+    # 动态 CID → PSM 映射
+    psm = cid_to_psm.get(l2cap_cid, None)
+    psm_name = L2CAP_PSMS.get(psm, None) if psm else None
+
+    # AVDTP
+    if psm == 0x0019 or psm_name == 'AVDTP':
+        if len(l2cap_payload) >= 2:
+            proto, avdtp_info = parse_avdtp(l2cap_payload)
+            return proto, "handle=0x{:04x} {}".format(handle, avdtp_info), 'avdtp'
+
+    # AVCTP (AVRCP)
+    if psm == 0x0017 or psm_name == 'AVCTP':
+        return 'AVRCP', "handle=0x{:04x} AVCTP len={}".format(handle, l2cap_len), 'avrcp'
+
+    # SDP
+    if psm == 0x0001 or psm_name == 'SDP':
+        return 'SDP', "handle=0x{:04x} SDP len={}".format(handle, l2cap_len), 'sdp'
+
+    # RFCOMM (HFP uses RFCOMM)
+    if psm == 0x0003 or psm_name == 'RFCOMM':
+        return 'RFCOMM', "handle=0x{:04x} RFCOMM len={}".format(handle, l2cap_len), 'hfp'
+
+    # ATT
+    if l2cap_cid == 0x0004:
+        return 'ATT', "handle=0x{:04x} ATT len={}".format(handle, l2cap_len), 'ble'
+
+    # SMP
+    if l2cap_cid == 0x0006:
+        return 'SMP', "handle=0x{:04x} SMP len={}".format(handle, l2cap_len), 'ble'
+
+    # Generic L2CAP
+    label = psm_name or cid_name or "CID=0x{:04x}".format(l2cap_cid)
+    return 'L2CAP', "handle=0x{:04x} {} len={}".format(handle, label, l2cap_len), 'l2cap'
+
+
+# ── 协议层颜色 ──
+PROTO_COLORS = {
+    'HCI_CMD': C.RED, 'HCI_EVT': C.RED,
+    'L2CAP': C.YEL, 'L2CAP_SIG': C.YEL,
+    'AVDTP': C.MAG,
+    'AVRCP': C.CYN,
+    'SDP': C.GRAY,
+    'RFCOMM': C.GRN,
+    'ATT': C.BLU, 'SMP': C.BLU,
+    'ACL': C.DIM,
+    'SCO': C.GRN,
+}
+
+PROTO_FILTER_MAP = {
+    'hci': ['HCI_CMD', 'HCI_EVT'],
+    'l2cap': ['L2CAP', 'L2CAP_SIG'],
+    'avdtp': ['AVDTP'],
+    'a2dp': ['AVDTP'],
+    'avrcp': ['AVRCP'],
+    'sdp': ['SDP'],
+    'hfp': ['RFCOMM'],
+    'acl': ['ACL', 'L2CAP', 'L2CAP_SIG', 'AVDTP', 'AVRCP', 'SDP', 'RFCOMM', 'ATT', 'SMP'],
+    'ble': ['ATT', 'SMP'],
+}
+
+# ── 包解析入口 ──
+def parse_packet(data, flags):
+    direction = 'Rcvd' if (flags & 1) else 'Sent'
+    if len(data) < 1:
+        return direction, 'UNKNOWN', '(empty)', None
+
+    pkt_type = data[0]
+
+    if pkt_type == 0x01:  # HCI Command
+        proto, info = parse_hci_cmd(data)
+        return direction, proto, info, 'hci'
+    elif pkt_type == 0x04:  # HCI Event
+        proto, info = parse_hci_evt(data)
+        # Num_Completed_Pkts 太多，标记为可过滤
+        if 'Num_Completed_Pkts' in info:
+            return direction, proto, info, 'hci_noisy'
+        return direction, proto, info, 'hci'
+    elif pkt_type == 0x02:  # ACL Data
+        proto, info, layer = parse_acl(data)
+        return direction, proto, info, layer
+    elif pkt_type == 0x03:  # SCO
+        return direction, 'SCO', "len={}".format(len(data)-1), 'sco'
+    else:
+        return direction, 'UNKNOWN', "type=0x{:02x} len={}".format(pkt_type, len(data)), None
+
+
+# ── btsnoop 文件读取 ──
+class BtSnoopReader:
+    HEADER_SIZE = 16
+    RECORD_HEADER_SIZE = 24
+
+    def __init__(self, fileobj):
+        self.f = fileobj
+        hdr = self.f.read(self.HEADER_SIZE)
+        if len(hdr) < self.HEADER_SIZE or hdr[:8] != b'btsnoop\x00':
+            raise ValueError("Not a valid btsnoop file")
+        self.version, self.datalink = struct.unpack('>II', hdr[8:16])
+        self.offset = self.HEADER_SIZE
+
+    def read_packet(self):
+        rec_hdr = self.f.read(self.RECORD_HEADER_SIZE)
+        if len(rec_hdr) < self.RECORD_HEADER_SIZE:
+            return None
+        orig_len, incl_len, flags, drops, ts_hi, ts_lo = struct.unpack('>IIIIII', rec_hdr)
+        ts = (ts_hi << 32) | ts_lo
+        data = self.f.read(incl_len)
+        if len(data) < incl_len:
+            return None
+        self.offset += self.RECORD_HEADER_SIZE + incl_len
+        return ts, flags, data
+
+    def tell(self):
+        return self.offset
+
+
+# ── 输出格式化 ──
+def format_line(no, time_str, direction, proto, info, layer_filter=None, hide_noisy=True):
+    color = PROTO_COLORS.get(proto, C.DIM)
+
+    if direction == 'Sent':
+        dir_str = "{}H→C{}".format(C.GRN, C.RST)
+    else:
+        dir_str = "{}C→H{}".format(C.YEL, C.RST)
+
+    proto_padded = proto.ljust(10)
+    return "{}{:>5}{}  {}{:<14}{}  {}  {}{:<10}{}  {}".format(
+        C.DIM, no, C.RST,
+        C.DIM, time_str, C.RST,
+        dir_str,
+        color, proto_padded, C.RST,
+        info
+    )
+
+
+def print_header():
+    print("{}╔═══════════════════════════════════════════════════════╗{}".format(C.BOLD, C.RST))
+    print("{}║   BT Snoop Live - Wireshark Terminal Edition v1.0   ║{}".format(C.BOLD, C.RST))
+    print("{}╚═══════════════════════════════════════════════════════╝{}".format(C.BOLD, C.RST))
+
+def print_table_header():
+    hdr = "{:>5}  {:<14}  {:<3}  {:<10}  {}".format("No", "Time", "Dir", "Protocol", "Info")
+    print("{}{}{}".format(C.DIM, hdr, C.RST))
+    print("{}{}{}".format(C.DIM, "─" * 80, C.RST))
+
+
+# ── 主逻辑 ──
+def process_file(filepath, layer_filter=None, hide_noisy=True):
+    """解析本地 btsnoop 文件"""
+    with open(filepath, 'rb') as f:
+        reader = BtSnoopReader(f)
+        no = 0
+        while True:
+            pkt = reader.read_packet()
+            if pkt is None:
+                break
+            ts, flags, data = pkt
+            direction, proto, info, layer = parse_packet(data, flags)
+
+            if hide_noisy and layer == 'hci_noisy':
+                continue
+            if layer_filter:
+                allowed = set()
+                for filt in layer_filter:
+                    allowed.update(PROTO_FILTER_MAP.get(filt, [filt]))
+                if proto not in allowed:
+                    continue
+
+            no += 1
+            time_str = ts_to_str(ts)
+            print(format_line(no, time_str, direction, proto, info))
+
+
+def process_live(serial=None, layer_filter=None, hide_noisy=True):
+    """实时读取手机 btsnoop"""
+    REMOTE_DIR = '/data/misc/bluetooth/logs'
+    REMOTE_PATH_FIXED = REMOTE_DIR + '/btsnoop_hci.log'
+
+    adb_prefix = ['adb']
+    if serial:
+        adb_prefix += ['-s', serial]
+
+    # [AI-GEN] 先尝试固定路径，找不到则自动选最新的带时间戳文件
+    check = subprocess.run(adb_prefix + ['shell', 'ls', '-la', REMOTE_PATH_FIXED],
+                          capture_output=True, text=True)
+    if check.returncode == 0:
+        REMOTE_PATH = REMOTE_PATH_FIXED
+    else:
+        find_latest = subprocess.run(
+            adb_prefix + ['shell', 'ls -t {}/btsnoop_hci*.log 2>/dev/null | head -1'.format(REMOTE_DIR)],
+            capture_output=True, text=True)
+        REMOTE_PATH = find_latest.stdout.strip()
+        if not REMOTE_PATH:
+            print("{}错误: 在 {} 下找不到 btsnoop_hci*.log{}".format(C.RED, REMOTE_DIR, C.RST))
+            print("请在开发者选项中开启「启用蓝牙 HCI 信息收集日志」")
+            return
+
+    print("{}读取 {}...{}".format(C.DIM, REMOTE_PATH, C.RST))
+    print("{}Ctrl+C 退出{}".format(C.DIM, C.RST))
+    print_table_header()
+
+    tmpfile = tempfile.NamedTemporaryFile(delete=False, suffix='.bin')
+    tmppath = tmpfile.name
+    tmpfile.close()
+
+    no = 0
+    last_size = 0
+
+    try:
+        while True:
+            # 获取文件大小
+            stat_res = subprocess.run(
+                adb_prefix + ['shell', 'stat', '-c', '%s', REMOTE_PATH],
+                capture_output=True, text=True)
+            if stat_res.returncode != 0:
+                time.sleep(1)
+                continue
+            cur_size = int(stat_res.stdout.strip())
+
+            if cur_size < last_size:
+                # 文件被重置（蓝牙重启等）
+                last_size = 0
+                no = 0
+                cid_to_psm.clear()
+                print("\n{}--- btsnoop 文件已重置 ---{}".format(C.YEL, C.RST))
+                print_table_header()
+
+            if cur_size > last_size:
+                if last_size == 0:
+                    # 首次读取：拉整个文件
+                    subprocess.run(adb_prefix + ['shell', 'cat', REMOTE_PATH],
+                                  stdout=open(tmppath, 'wb'), stderr=subprocess.DEVNULL)
+                else:
+                    # 增量读取
+                    skip = last_size
+                    cmd = "dd if={} bs=1 skip={} count={} 2>/dev/null".format(
+                        REMOTE_PATH, skip, cur_size - last_size)
+                    subprocess.run(adb_prefix + ['shell', cmd],
+                                  stdout=open(tmppath, 'wb'), stderr=subprocess.DEVNULL)
+
+                with open(tmppath, 'rb') as f:
+                    if last_size == 0:
+                        try:
+                            reader = BtSnoopReader(f)
+                        except ValueError:
+                            last_size = cur_size
+                            time.sleep(0.5)
+                            continue
+                    else:
+                        pass  # 增量数据，直接解析 record
+
+                    while True:
+                        rec_hdr = f.read(24)
+                        if len(rec_hdr) < 24:
+                            break
+                        orig_len, incl_len, flags, drops, ts_hi, ts_lo = struct.unpack('>IIIIII', rec_hdr)
+                        ts = (ts_hi << 32) | ts_lo
+                        pkt_data = f.read(incl_len)
+                        if len(pkt_data) < incl_len:
+                            break
+
+                        direction, proto, info, layer = parse_packet(pkt_data, flags)
+
+                        if hide_noisy and layer == 'hci_noisy':
+                            continue
+                        if layer_filter:
+                            allowed = set()
+                            for filt in layer_filter:
+                                allowed.update(PROTO_FILTER_MAP.get(filt, [filt]))
+                            if proto not in allowed:
+                                continue
+
+                        no += 1
+                        time_str = ts_to_str(ts)
+                        print(format_line(no, time_str, direction, proto, info), flush=True)
+
+                last_size = cur_size
+
+            time.sleep(0.5)
+
+    except KeyboardInterrupt:
+        print("\n{}退出{}".format(C.DIM, C.RST))
+    finally:
+        try:
+            os.unlink(tmppath)
+        except:
+            pass
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='蓝牙 btsnoop 实时解析工具（Wireshark 终端版）',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+协议层过滤: hci, l2cap, avdtp, a2dp, avrcp, hfp, sdp, acl, ble
+示例:
+  bt-snoop-live                          # 实时全部
+  bt-snoop-live --filter avdtp           # 只看 AVDTP 信令
+  bt-snoop-live --filter hci             # 只看 HCI
+  bt-snoop-live --filter a2dp            # 只看 A2DP (=AVDTP)
+  bt-snoop-live --filter hci,avdtp       # HCI + AVDTP
+  bt-snoop-live -f btsnoop_hci.log       # 解析本地文件
+  bt-snoop-live -f dump.cfa --filter hci # 解析 .cfa 文件
+''')
+    parser.add_argument('-f', '--file', help='从本地 btsnoop/cfa 文件解析')
+    parser.add_argument('-s', '--serial', help='adb 设备序列号')
+    parser.add_argument('--filter', help='协议层过滤（逗号分隔）')
+    parser.add_argument('--show-noisy', action='store_true', help='显示高频事件 (Num_Completed_Pkts)')
+    args = parser.parse_args()
+
+    layer_filter = None
+    if args.filter:
+        layer_filter = set(args.filter.lower().split(','))
+
+    print_header()
+    if layer_filter:
+        print("{}Filter: {}{}".format(C.DIM, ', '.join(layer_filter), C.RST))
+
+    if args.file:
+        print_table_header()
+        process_file(args.file, layer_filter, not args.show_noisy)
+    else:
+        process_live(args.serial, layer_filter, not args.show_noisy)
+
+
+if __name__ == '__main__':
+    main()

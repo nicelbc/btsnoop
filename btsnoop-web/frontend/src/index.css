@@ -1,0 +1,98 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --ws-bg: #1a1a2e;
+    --ws-panel: #16213e;
+    --ws-border: #0f3460;
+    --ws-header: #0a1628;
+    --ws-selected: #1e3a5f;
+    --ws-hover: #1c2f4a;
+    --ws-accent: #4fc3f7;
+  }
+
+  body {
+    background-color: var(--ws-bg);
+    color: #e0e0e0;
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #2a3f5f #16213e;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: #16213e;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #2a3f5f;
+    border-radius: 4px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #3a5f8f;
+  }
+}
+
+@layer components {
+  .panel {
+    @apply bg-ws-panel border border-ws-border rounded-sm;
+  }
+
+  .panel-header {
+    @apply bg-ws-header px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-gray-400 border-b border-ws-border flex items-center justify-between;
+  }
+
+  .packet-row {
+    @apply px-2 py-0.5 cursor-pointer border-b border-ws-border/30 text-xs font-mono hover:bg-ws-hover transition-colors duration-75;
+  }
+
+  .packet-row-selected {
+    @apply bg-ws-selected border-l-2 border-l-ws-accent;
+  }
+
+  .hex-byte {
+    @apply inline-block w-6 text-center text-xs font-mono;
+  }
+
+  .hex-byte-highlighted {
+    @apply bg-blue-800/60 text-blue-200 rounded-sm;
+  }
+
+  .tree-node {
+    @apply px-2 py-0.5 cursor-pointer hover:bg-ws-hover text-xs font-mono;
+  }
+
+  .tree-node-expanded {
+    @apply bg-ws-hover/50;
+  }
+
+  .upload-zone {
+    @apply border-2 border-dashed border-ws-border rounded-lg p-8 text-center cursor-pointer transition-all duration-200 hover:border-ws-accent hover:bg-ws-panel/50;
+  }
+
+  .upload-zone-active {
+    @apply border-ws-accent bg-ws-accent/10 scale-[1.02];
+  }
+
+  .status-dot {
+    @apply w-2 h-2 rounded-full inline-block mr-2;
+  }
+
+  .status-connected {
+    @apply bg-green-500 animate-pulse;
+  }
+
+  .status-disconnected {
+    @apply bg-red-500;
+  }
+}
