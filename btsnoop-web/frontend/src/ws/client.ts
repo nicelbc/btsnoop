@@ -33,6 +33,7 @@ export class WebSocketClient {
     this.ws.onmessage = (event) => {
       try {
         const msg: WsMessage = JSON.parse(event.data);
+        console.log('[WS] Received:', msg.type, 'packets' in msg ? (msg as any).packets?.length : '');
         this.handleMessage(msg);
       } catch (err) {
         console.error('[WS] Failed to parse message:', err);

@@ -55,7 +55,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       {/* Start Capture */}
       <ToolbarButton
         onClick={onStartCapture}
-        disabled={isCapturing || !state.wsConnected}
+        disabled={isCapturing}
         title="Start live capture"
         active={false}
       >
