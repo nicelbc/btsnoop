@@ -119,7 +119,50 @@ def _parse_packet_inner(
         acl_layer, handle, acl_payload = hci.decode_hci_acl(data)
         layers.append(acl_layer)
 
-        # Decode L2CAP
+        # L2CAP fragment reassembly
+        # PB flag is in bits 13-12 of the handle field
+        if len(data) >= 5:
+            handle_flags = struct.unpack("<H", data[1:3])[0]
+            pb_flag = (handle_flags >> 12) & 0x03
+            conn_handle = handle_flags & 0x0FFF
+
+            if pb_flag == 0x01:
+                # Continuation fragment
+                if conn_handle in session.l2cap_fragments:
+                    expected_len, buf = session.l2cap_fragments[conn_handle]
+                    buf = buf + acl_payload
+                    if len(buf) >= expected_len + 4:
+                        # Complete! Replace acl_payload with reassembled data
+                        acl_payload = buf
+                        del session.l2cap_fragments[conn_handle]
+                    else:
+                        session.l2cap_fragments[conn_handle] = (expected_len, buf)
+                        layers.append(DecodedLayer(
+                            protocol="L2CAP",
+                            summary=f"Fragment (continuation) handle=0x{conn_handle:04X} +{len(acl_payload)} bytes",
+                        ))
+                        return layers
+                else:
+                    layers.append(DecodedLayer(
+                        protocol="L2CAP",
+                        summary=f"Fragment (orphan continuation) +{len(acl_payload)} bytes",
+                    ))
+                    return layers
+
+            elif pb_flag == 0x02 and len(acl_payload) >= 4:
+                # First fragment (or complete packet)
+                l2cap_total_len = struct.unpack("<H", acl_payload[0:2])[0]
+                available = len(acl_payload) - 4  # minus L2CAP header
+                if available < l2cap_total_len:
+                    # This is the start of a fragmented L2CAP PDU
+                    session.l2cap_fragments[conn_handle] = (l2cap_total_len, acl_payload)
+                    layers.append(DecodedLayer(
+                        protocol="L2CAP",
+                        summary=f"Fragment (first) handle=0x{conn_handle:04X} {available}/{l2cap_total_len} bytes",
+                    ))
+                    return layers
+
+        # Decode L2CAP (complete packet)
         if len(acl_payload) >= 4:
             l2cap_layer, upper_proto, upper_payload = l2cap.decode(acl_payload, session)
             layers.append(l2cap_layer)

@@ -108,12 +108,14 @@ class PacketSummary:
 class SessionState:
     """
     Maintains connection state across packets.
-    Tracks CID-to-PSM mappings and connection handles.
+    Tracks CID-to-PSM mappings, connection handles, and L2CAP fragment reassembly.
     """
     # Maps L2CAP CID → PSM for dynamic channels
     cid_to_psm: dict[int, int] = field(default_factory=dict)
     # Maps connection handle → remote BD_ADDR
     handle_to_addr: dict[int, str] = field(default_factory=dict)
+    # L2CAP fragment reassembly: handle → (expected_total_len, accumulated_data)
+    l2cap_fragments: dict[int, tuple[int, bytes]] = field(default_factory=dict)
     # Packet counter
     packet_count: int = 0
 
@@ -121,6 +123,7 @@ class SessionState:
         """Reset all state (e.g. when btsnoop file resets)."""
         self.cid_to_psm.clear()
         self.handle_to_addr.clear()
+        self.l2cap_fragments.clear()
         self.packet_count = 0
 
     def map_cid_to_psm(self, cid: int, psm: int):

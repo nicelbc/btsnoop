@@ -21,3 +21,7 @@ Thumbs.db
 .env
 .env.local
 .github/
+
+# Logs
+logs/
+*.log

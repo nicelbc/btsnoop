@@ -410,6 +410,9 @@ def parse_capabilities(data: bytes) -> list[str]:
             codec_data = cat_data[2:]
             codec_info = parse_codec_capability(media_type, codec_type, codec_data)
             caps.append(f"Codec={codec_info}")
+        elif cat_id == 0x07 and cat_len >= 2 and len(cat_data) < 2:
+            # MEDIA_CODEC header present but data truncated (L2CAP fragmentation)
+            caps.append("MEDIA_CODEC(fragmented)")
         elif cat_id == 0x04 and cat_len >= 2 and len(cat_data) >= 2:
             # CONTENT_PROTECTION
             cp_type = struct.unpack("<H", cat_data[0:2])[0]

@@ -13,11 +13,26 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 import os
 import sys
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
+
+# 配置日志
+LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[
+        logging.FileHandler(os.path.join(LOG_DIR, "server.log"), encoding="utf-8"),
+        logging.StreamHandler(),
+    ],
+)
+logger = logging.getLogger("btsnoop-web")
 
 from fastapi import FastAPI, File, HTTPException, Query, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -40,11 +55,11 @@ async def lifespan(app: FastAPI):
     """Manage startup/shutdown lifecycle."""
     # Startup: begin session cleanup loop
     await session_manager.start_cleanup_loop(interval=60.0)
-    print("[Server] Started session cleanup loop")
+    logger.info("Started session cleanup loop")
     yield
     # Shutdown: stop cleanup
     await session_manager.stop_cleanup_loop()
-    print("[Server] Stopped session cleanup loop")
+    logger.info("Stopped session cleanup loop")
 
 
 # --- App & session manager ---
@@ -138,6 +153,11 @@ async def upload_btsnoop(file: UploadFile = File(...)):
 
         session.add_packet(record.data, record.flags, pkt_summary)
         packet_index += 1
+
+    logger.info(
+        f"上传解析完成: file={file.filename}, session={session.session_id}, "
+        f"packets={session.total_packets}, size={len(content)} bytes"
+    )
 
     return JSONResponse(
         content={
