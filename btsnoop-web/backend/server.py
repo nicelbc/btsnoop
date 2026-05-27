@@ -639,28 +639,33 @@ async def websocket_live(websocket: WebSocket, session_id: str):
 
     # Subscribe to new packets
     queue = live_session.subscribe()
+    active_filter_func = None  # Current active filter for live packets
     try:
         while True:
             # Wait for new packets (with timeout to check for disconnect)
             try:
                 batch = []
                 pkt = await asyncio.wait_for(queue.get(), timeout=0.1)
-                batch.append(pkt)
+                # Apply active filter to live packets
+                if active_filter_func is None or active_filter_func(pkt, live_session.raw_packets[pkt.index] if pkt.index < len(live_session.raw_packets) else b""):
+                    batch.append(pkt)
                 # Drain up to BATCH_SIZE more
                 while len(batch) < BATCH_SIZE:
                     try:
                         pkt = queue.get_nowait()
-                        batch.append(pkt)
+                        if active_filter_func is None or active_filter_func(pkt, live_session.raw_packets[pkt.index] if pkt.index < len(live_session.raw_packets) else b""):
+                            batch.append(pkt)
                     except asyncio.QueueEmpty:
                         break
 
-                await websocket.send_json({
-                    "type": "packet_batch",
-                    "packets": [p.to_dict() for p in batch],
-                    "total": live_session.total_packets,
-                    "batch_offset": live_session.total_packets - len(batch),
-                    "live": True,
-                })
+                if batch:
+                    await websocket.send_json({
+                        "type": "packet_batch",
+                        "packets": [p.to_dict() for p in batch],
+                        "total": live_session.total_packets,
+                        "batch_offset": live_session.total_packets - len(batch),
+                        "live": True,
+                    })
             except asyncio.TimeoutError:
                 # Check if capture ended
                 if not live_session.is_running and queue.empty():
@@ -697,16 +702,15 @@ async def websocket_live(websocket: WebSocket, session_id: str):
                         if error:
                             await websocket.send_json({"type": "error", "message": f"Invalid filter: {error}"})
                         else:
-                            filter_func = compile_filter(expression)
+                            active_filter_func = compile_filter(expression)
                             filtered = [s for i, s in enumerate(live_session.summaries)
-                                        if filter_func(s, live_session.raw_packets[i])]
+                                        if active_filter_func(s, live_session.raw_packets[i])]
                             await websocket.send_json({
                                 "type": "filter_applied",
                                 "expression": expression,
                                 "matched": len(filtered),
                                 "total": live_session.total_packets,
                             })
-                            # Send filtered packets in batches
                             for i in range(0, len(filtered), 100):
                                 batch = filtered[i:i+100]
                                 await websocket.send_json({
@@ -716,6 +720,7 @@ async def websocket_live(websocket: WebSocket, session_id: str):
                                     "batch_offset": i,
                                 })
                     else:
+                        active_filter_func = None
                         await websocket.send_json({
                             "type": "filter_applied",
                             "expression": "",
