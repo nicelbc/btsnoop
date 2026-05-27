@@ -147,8 +147,8 @@ def decode(payload: bytes) -> DecodedLayer:
     opcode_name = ATT_OPCODES.get(opcode, f"0x{opcode:02X}")
 
     fields = [
-        DecodedField("opcode", f"0x{opcode:02X}"),
-        DecodedField("method", opcode_name),
+        DecodedField("opcode", f"0x{opcode:02X}", offset=0, length=1),
+        DecodedField("method", opcode_name, offset=0, length=1),
     ]
 
     if is_command:
@@ -167,22 +167,22 @@ def decode(payload: bytes) -> DecodedLayer:
         error_name = ATT_ERRORS.get(error_code, f"0x{error_code:02X}")
         req_name = ATT_OPCODES.get(req_opcode, f"0x{req_opcode:02X}")
         fields.extend([
-            DecodedField("request_opcode", req_name),
-            DecodedField("handle", f"0x{handle:04X}"),
-            DecodedField("error_code", error_name),
+            DecodedField("request_opcode", req_name, offset=1, length=1),
+            DecodedField("handle", f"0x{handle:04X}", offset=2, length=2),
+            DecodedField("error_code", error_name, offset=4, length=1),
         ])
         summary = f"ERROR_RSP: {req_name} handle=0x{handle:04X} {error_name}"
 
     # Exchange MTU Request
     elif opcode == 0x02 and len(params) >= 2:
         client_mtu = struct.unpack("<H", params[0:2])[0]
-        fields.append(DecodedField("client_rx_mtu", client_mtu))
+        fields.append(DecodedField("client_rx_mtu", client_mtu, offset=1, length=2))
         summary = f"EXCHANGE_MTU_REQ mtu={client_mtu}"
 
     # Exchange MTU Response
     elif opcode == 0x03 and len(params) >= 2:
         server_mtu = struct.unpack("<H", params[0:2])[0]
-        fields.append(DecodedField("server_rx_mtu", server_mtu))
+        fields.append(DecodedField("server_rx_mtu", server_mtu, offset=1, length=2))
         summary = f"EXCHANGE_MTU_RSP mtu={server_mtu}"
 
     # Find Information Request
