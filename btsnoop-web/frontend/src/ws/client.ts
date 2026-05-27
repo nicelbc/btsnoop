@@ -7,16 +7,18 @@ export class WebSocketClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private sessionId: string;
   private filterPending = false;
+  private wsPath: string;
 
-  constructor(sessionId: string, dispatch: React.Dispatch<PacketAction>) {
+  constructor(sessionId: string, dispatch: React.Dispatch<PacketAction>, live = false) {
     this.sessionId = sessionId;
     this.dispatch = dispatch;
+    this.wsPath = live ? `/ws/live/${sessionId}` : `/ws/${sessionId}`;
   }
 
   connect(): void {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const host = window.location.host;
-    const url = `${protocol}//${host}/ws/${this.sessionId}`;
+    const url = `${protocol}//${host}${this.wsPath}`;
 
     this.ws = new WebSocket(url);
 
@@ -52,6 +54,7 @@ export class WebSocketClient {
     switch (msg.type) {
       case 'packet_batch':
         if (this.filterPending) {
+          // First batch after filter: replace all packets
           this.dispatch({ type: 'SET_PACKETS', packets: msg.packets });
           this.filterPending = false;
         } else {
@@ -73,6 +76,12 @@ export class WebSocketClient {
         break;
       case 'error':
         console.error('[WS] Server error:', msg.message);
+        break;
+      default:
+        // Handle live_stopped and other unknown messages
+        if ((msg as any).type === 'live_stopped') {
+          this.dispatch({ type: 'SET_WS_CONNECTED', connected: false });
+        }
         break;
     }
   }

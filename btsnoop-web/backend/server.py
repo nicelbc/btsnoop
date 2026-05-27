@@ -675,7 +675,9 @@ async def websocket_live(websocket: WebSocket, session_id: str):
             try:
                 data = await asyncio.wait_for(websocket.receive_text(), timeout=0.01)
                 msg = json.loads(data)
-                if msg.get("action") == "get_detail":
+                action = msg.get("action")
+
+                if action == "get_detail":
                     idx = msg.get("index", 0)
                     if 0 <= idx < live_session.total_packets:
                         summary = live_session.summaries[idx]
@@ -687,6 +689,48 @@ async def websocket_live(websocket: WebSocket, session_id: str):
                             "raw_hex": raw.hex(),
                             "flags": flags,
                         })
+
+                elif action == "set_filter":
+                    expression = msg.get("expression", "")
+                    if expression:
+                        error = validate_filter(expression)
+                        if error:
+                            await websocket.send_json({"type": "error", "message": f"Invalid filter: {error}"})
+                        else:
+                            filter_func = compile_filter(expression)
+                            filtered = [s for i, s in enumerate(live_session.summaries)
+                                        if filter_func(s, live_session.raw_packets[i])]
+                            await websocket.send_json({
+                                "type": "filter_applied",
+                                "expression": expression,
+                                "matched": len(filtered),
+                                "total": live_session.total_packets,
+                            })
+                            # Send filtered packets in batches
+                            for i in range(0, len(filtered), 100):
+                                batch = filtered[i:i+100]
+                                await websocket.send_json({
+                                    "type": "packet_batch",
+                                    "packets": [p.to_dict() for p in batch],
+                                    "total": len(filtered),
+                                    "batch_offset": i,
+                                })
+                    else:
+                        await websocket.send_json({
+                            "type": "filter_applied",
+                            "expression": "",
+                            "matched": live_session.total_packets,
+                            "total": live_session.total_packets,
+                        })
+                        for i in range(0, live_session.total_packets, 100):
+                            batch = live_session.summaries[i:i+100]
+                            await websocket.send_json({
+                                "type": "packet_batch",
+                                "packets": [p.to_dict() for p in batch],
+                                "total": live_session.total_packets,
+                                "batch_offset": i,
+                            })
+
             except asyncio.TimeoutError:
                 pass
             except Exception:

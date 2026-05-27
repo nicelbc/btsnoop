@@ -169,24 +169,11 @@ const App: React.FC = () => {
       setLiveState({ sessionId: data.session_id, device: data.device });
       setShowUpload(false);
 
-      // Connect to live WebSocket
+      // Connect to live WebSocket (reuse WebSocketClient with live=true)
       if (wsClientRef.current) wsClientRef.current.disconnect();
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const host = window.location.host;
-      const ws = new WebSocket(`${protocol}//${host}/ws/live/${data.session_id}`);
-      ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'packet_batch') {
-          dispatch({ type: 'ADD_PACKETS', packets: msg.packets });
-        } else if (msg.type === 'packet_detail') {
-          dispatch({ type: 'SET_DETAIL', detail: { packet: msg.packet, raw_hex: msg.raw_hex, flags: msg.flags } });
-        } else if (msg.type === 'live_stopped') {
-          setLiveState(null);
-          dispatch({ type: 'SET_WS_CONNECTED', connected: false });
-        }
-      };
-      ws.onopen = () => dispatch({ type: 'SET_WS_CONNECTED', connected: true });
-      ws.onclose = () => dispatch({ type: 'SET_WS_CONNECTED', connected: false });
+      const client = new WebSocketClient(data.session_id, dispatch, true);
+      client.connect();
+      wsClientRef.current = client;
       dispatch({ type: 'SET_SESSION_ID', sessionId: data.session_id });
     } catch (err) {
       alert(`ADB 连接失败: ${err}`);
